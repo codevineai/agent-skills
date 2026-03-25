@@ -1,0 +1,18 @@
+{
+  "name": "agent-skills",
+  "owner": {
+    "name": "CodeVine AI",
+    "email": "dev@codevineai.com"
+  },
+  "metadata": {
+    "description": "Shared agent skills for CodeVine teams"
+  },
+  "plugins": [
+    {
+      "name": "jira",
+      "source": "./jira",
+      "description": "Query and manage Jira issues - search, create, bulk create, update, comment, link, transition status, and look up users.",
+      "keywords": ["jira", "issues", "project-management"]
+    }
+  ]
+}

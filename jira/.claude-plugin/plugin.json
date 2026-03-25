@@ -1,0 +1,9 @@
+{
+  "name": "jira",
+  "version": "1.0.0",
+  "description": "Query and manage Jira issues - search, create, bulk create, update, comment, link, transition status, and look up users.",
+  "author": {
+    "name": "CodeVine AI"
+  },
+  "keywords": ["jira", "issues", "project-management"]
+}
