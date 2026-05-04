@@ -1,6 +1,6 @@
 ---
 name: jira
-description: Query and manage Jira issues - search with JQL, view details, update fields, transition status, and look up users.
+description: Query and manage Jira issues - search, create, bulk create, update, comment, link, transition status, and look up users.
 ---
 
 # Jira Skill
@@ -32,7 +32,7 @@ Read only the type files relevant to your task:
 Simple query:
 
 ```bash
-~/.claude/skills/jira/jira_api.js <<'EOF'
+node ${CLAUDE_SKILL_DIR}/jira_api.js <<'EOF'
 const result = await jira.issues.search('assignee = currentUser() ORDER BY updated DESC', { maxResults: 5 });
 for (const issue of result.issues) {
   console.log(`${issue.key}: ${issue.fields.summary}`);
@@ -43,7 +43,7 @@ EOF
 Multiple operations in one execution:
 
 ```bash
-~/.claude/skills/jira/jira_api.js <<'EOF'
+node ${CLAUDE_SKILL_DIR}/jira_api.js <<'EOF'
 // Get all high-priority bugs assigned to me that are still open
 const result = await jira.issues.search(
   'assignee = currentUser() AND type = Bug AND priority = High AND status != Done'
@@ -63,6 +63,41 @@ EOF
 ```
 
 ## Quick Reference
+
+### Create Issue
+
+```javascript
+const result = await jira.issues.create({
+  project: { key: 'PROJ' },
+  issuetype: { name: 'Task' },
+  summary: 'My new task',
+  priority: { name: 'High' },
+  labels: ['backend']
+});
+console.log(result.key);  // 'PROJ-456'
+```
+
+### Create Issue Under an Epic
+
+```javascript
+await jira.issues.create({
+  project: { key: 'PROJ' },
+  issuetype: { name: 'Task' },
+  summary: 'Task under epic',
+  parent: { key: 'PROJ-100' }
+});
+```
+
+### Bulk Create Issues
+
+```javascript
+const result = await jira.issues.createBulk([
+  { fields: { project: { key: 'PROJ' }, issuetype: { name: 'Task' }, summary: 'Task 1' } },
+  { fields: { project: { key: 'PROJ' }, issuetype: { name: 'Task' }, summary: 'Task 2' } },
+  { fields: { project: { key: 'PROJ' }, issuetype: { name: 'Task' }, summary: 'Task 3' } }
+]);
+for (const issue of result.issues) console.log(issue.key);
+```
 
 ### List Projects
 
@@ -135,6 +170,25 @@ if (done) {
 }
 ```
 
+### Add Comment
+
+```javascript
+await jira.issues.addComment('PROJ-123', 'Plain text comment');
+```
+
+### Link Issues
+
+```javascript
+// Common link types: "Blocks", "Cloners", "Duplicate", "Relates"
+await jira.issues.link('Blocks', 'PROJ-100', 'PROJ-200');
+```
+
+### Delete Issue
+
+```javascript
+await jira.issues.delete('PROJ-123');
+```
+
 ### Find Custom Fields
 
 ```javascript
@@ -150,11 +204,6 @@ for (const f of custom) {
 | API | Methods |
 |-----|---------|
 | `jira.projects` | `list(options?)`, `get(key, options?)` |
-| `jira.issues` | `search(jql, options?)`, `get(key, options?)`, `update(key, fields)`, `updateWithOperations(key, ops)`, `getTransitions(key)`, `transition(key, id, fields?)`, `getEditMeta(key)` |
+| `jira.issues` | `create(fields)`, `createBulk(issues)`, `search(jql, options?)`, `get(key, options?)`, `update(key, fields)`, `updateWithOperations(key, ops)`, `delete(key)`, `getTransitions(key)`, `transition(key, id, fields?)`, `getEditMeta(key)`, `addComment(key, body)`, `getComments(key, options?)`, `link(type, inwardKey, outwardKey)` |
 | `jira.users` | `search(query, options?)`, `assignable(project, options?)` |
 | `jira.fields` | `list()` |
-
-
----
-**REQUIRED:** On first use this session, run: `~/.launchcode/scripts/api.js track 50877e39-bbb8-4763-a739-fc56b88c9bc7 skill jira $CLAUDE_SESSION_ID`
-**REQUIRED:** Each time you use this skill to solve a non-trivial user request, run: `~/.launchcode/scripts/api.js kudos 50877e39-bbb8-4763-a739-fc56b88c9bc7 skill jira "description of the use case" $CLAUDE_SESSION_ID`

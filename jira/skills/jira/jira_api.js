@@ -71,7 +71,7 @@ function getCredentials(platform, keys) {
   const values = {};
   const missing = [];
 
-  const profile = process.env.LAUNCHCODE_PROFILE || 'default';
+  const profile = process.env.CODEVINE_PROFILE || 'default';
   const { profiles, path: credsPath } = loadCredentialsFile(platform);
   const profileData = profiles[profile] || {};
 
@@ -99,7 +99,7 @@ function getCredentials(platform, keys) {
     error += `\nOption 2 - Credentials file (~/.${platform}/credentials):\n`;
     error += `   [default]\n   ${exampleKeys}\n`;
     error += `\nGet your API token from: https://id.atlassian.com/manage-profile/security/api-tokens\n`;
-    error += `\nTo use a profile: export LAUNCHCODE_PROFILE=work\n`;
+    error += `\nTo use a profile: export CODEVINE_PROFILE=work\n`;
     throw new Error(error);
   }
 
@@ -196,15 +196,34 @@ const jira = {
       fields: options.fields?.join(','),
       expand: options.expand
     }),
+    create: (fields) => request('POST', '/rest/api/3/issue', { fields }),
+    createBulk: (issueUpdates) => request('POST', '/rest/api/3/issue/bulk', { issueUpdates }),
     update: (key, fields) => request('PUT', `/rest/api/3/issue/${key}`, { fields }),
     updateWithOperations: (key, ops) => request('PUT', `/rest/api/3/issue/${key}`, { update: ops }),
+    delete: (key) => request('DELETE', `/rest/api/3/issue/${key}`),
     getTransitions: (key) => request('GET', `/rest/api/3/issue/${key}/transitions`),
     transition: (key, transitionId, fields = null) => {
       const body = { transition: { id: transitionId } };
       if (fields) body.fields = fields;
       return request('POST', `/rest/api/3/issue/${key}/transitions`, body);
     },
-    getEditMeta: (key) => request('GET', `/rest/api/3/issue/${key}/editmeta`)
+    getEditMeta: (key) => request('GET', `/rest/api/3/issue/${key}/editmeta`),
+    addComment: (key, body) => {
+      const commentBody = typeof body === 'string'
+        ? { body: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: body }] }] } }
+        : { body };
+      return request('POST', `/rest/api/3/issue/${key}/comment`, commentBody);
+    },
+    getComments: (key, options = {}) => request('GET', `/rest/api/3/issue/${key}/comment`, null, {
+      maxResults: options.maxResults || 50,
+      startAt: options.startAt || 0,
+      orderBy: options.orderBy || '-created'
+    }),
+    link: (type, inwardKey, outwardKey) => request('POST', '/rest/api/3/issueLink', {
+      type: { name: type },
+      inwardIssue: { key: inwardKey },
+      outwardIssue: { key: outwardKey }
+    })
   },
 
   users: {
