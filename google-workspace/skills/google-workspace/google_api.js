@@ -1,0 +1,527 @@
+#!/usr/bin/env node
+/**
+ * Google Workspace API Skill
+ *
+ * Access Gmail, Google Calendar, and Google Drive from Claude Code.
+ * Uses OAuth 2.0 with refresh tokens for authentication.
+ *
+ * Credentials (in priority order):
+ *   1. Environment variables: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN
+ *   2. Credentials file: ~/.google-workspace/credentials (INI format with profiles)
+ */
+
+import { homedir } from 'os';
+import { join } from 'path';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+
+// ============================================================================
+// CONFIGURATION
+// ============================================================================
+
+const PLATFORM = 'google-workspace';
+const CREDENTIAL_KEYS = ['GOOGLE_REFRESH_TOKEN'];
+
+// Shared OAuth client — Desktop app type, client secret is not confidential per Google's docs.
+// Users only need a GOOGLE_REFRESH_TOKEN in their credentials file.
+const DEFAULT_CLIENT_ID = '797454094219-uq1uhvee4p35es9r9k8rt2ph7ac5tbsj.apps.googleusercontent.com';
+const DEFAULT_CLIENT_SECRET = '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';
+
+// ============================================================================
+// CREDENTIALS HELPER
+// ============================================================================
+
+function parseIniFile(content) {
+  const profiles = {};
+  let currentProfile = 'default';
+
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith(';')) continue;
+
+    const profileMatch = trimmed.match(/^\[([^\]]+)\]$/);
+    if (profileMatch) {
+      currentProfile = profileMatch[1].trim();
+      if (!profiles[currentProfile]) profiles[currentProfile] = {};
+      continue;
+    }
+
+    const eqIndex = trimmed.indexOf('=');
+    if (eqIndex > 0) {
+      const key = trimmed.slice(0, eqIndex).trim();
+      const value = trimmed.slice(eqIndex + 1).trim();
+      if (!profiles[currentProfile]) profiles[currentProfile] = {};
+      profiles[currentProfile][key] = value;
+    }
+  }
+  return profiles;
+}
+
+function loadCredentialsFile(platform) {
+  const paths = [
+    join(process.cwd(), `.${platform}`, 'credentials'),
+    join(homedir(), `.${platform}`, 'credentials')
+  ];
+
+  for (const path of paths) {
+    if (existsSync(path)) {
+      try {
+        const content = readFileSync(path, 'utf-8');
+        return { profiles: parseIniFile(content), path };
+      } catch (e) { /* Continue */ }
+    }
+  }
+  return { profiles: {}, path: null };
+}
+
+function getCredentials(platform, keys) {
+  const values = {};
+  const missing = [];
+
+  const profile = process.env.GOOGLE_PROFILE || 'default';
+  const { profiles, path: credsPath } = loadCredentialsFile(platform);
+  const profileData = profiles[profile] || {};
+
+  for (const key of keys) {
+    if (process.env[key]) {
+      values[key] = process.env[key];
+      continue;
+    }
+    if (profileData[key]) {
+      values[key] = profileData[key];
+      continue;
+    }
+    if (profile !== 'default' && profiles['default']?.[key]) {
+      values[key] = profiles['default'][key];
+      continue;
+    }
+    missing.push(key);
+  }
+
+  if (missing.length > 0) {
+    const exampleKeys = keys.map(k => `${k}=your-value-here`).join('\n   ');
+    let error = `Missing credentials for ${platform}: ${missing.join(', ')}\n\n`;
+    error += `Option 1 - Environment variables:\n`;
+    for (const key of missing) error += `   export ${key}="..."\n`;
+    error += `\nOption 2 - Credentials file (~/.${platform}/credentials):\n`;
+    error += `   [default]\n   ${exampleKeys}\n`;
+    error += `\nSetup instructions:\n`;
+    error += `  1. Go to https://console.cloud.google.com/apis/credentials\n`;
+    error += `  2. Create an OAuth 2.0 Client ID (Desktop app type)\n`;
+    error += `  3. Enable Gmail API, Calendar API, and Drive API\n`;
+    error += `  4. Run the setup script: node ${CLAUDE_SKILL_DIR}/setup.js\n`;
+    error += `\nTo use a profile: export GOOGLE_PROFILE=work\n`;
+    throw new Error(error);
+  }
+
+  return values;
+}
+
+// ============================================================================
+// LOAD CREDENTIALS & TOKEN MANAGEMENT
+// ============================================================================
+
+const creds = getCredentials(PLATFORM, CREDENTIAL_KEYS);
+
+// Use credentials file values if present, otherwise fall back to built-in defaults
+const { profiles } = loadCredentialsFile(PLATFORM);
+const profile = process.env.GOOGLE_PROFILE || 'default';
+const profileData = profiles[profile] || profiles['default'] || {};
+const clientId = process.env.GOOGLE_CLIENT_ID || profileData.GOOGLE_CLIENT_ID || DEFAULT_CLIENT_ID;
+const clientSecret = process.env.GOOGLE_CLIENT_SECRET || profileData.GOOGLE_CLIENT_SECRET || DEFAULT_CLIENT_SECRET;
+const refreshToken = creds.GOOGLE_REFRESH_TOKEN;
+
+let cachedAccessToken = null;
+let tokenExpiry = 0;
+
+async function getAccessToken() {
+  if (cachedAccessToken && Date.now() < tokenExpiry - 30000) {
+    return cachedAccessToken;
+  }
+
+  const response = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+      grant_type: 'refresh_token'
+    })
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    let parsed = {};
+    try { parsed = JSON.parse(text); } catch (e) { /* raw text */ }
+    const code = parsed.error || '';
+    const desc = parsed.error_description || text;
+
+    let hint = '';
+    if (code === 'invalid_grant' || desc.includes('Token has been expired or revoked')) {
+      hint = `\n\nYour refresh token is no longer valid. This happens when:\n`
+        + `  - You revoked access at https://myaccount.google.com/permissions\n`
+        + `  - The token expired (Google refresh tokens for "Testing" apps expire after 7 days)\n`
+        + `  - The OAuth client was deleted or recreated\n\n`
+        + `Fix: Re-run the setup script:\n`
+        + `  node ${CLAUDE_SKILL_DIR}/setup.js\n`;
+    } else if (code === 'invalid_client' || desc.includes('unauthorized_client')) {
+      hint = `\n\nYour client ID or client secret is wrong.\n\n`
+        + `Fix: Check ~/.google-workspace/credentials and verify GOOGLE_CLIENT_ID\n`
+        + `and GOOGLE_CLIENT_SECRET match your GCP OAuth client.\n`
+        + `Console: https://console.cloud.google.com/apis/credentials\n`;
+    } else if (response.status === 403 || desc.includes('access_denied')) {
+      hint = `\n\nThe required API is not enabled in your GCP project.\n\n`
+        + `Fix: Enable these APIs at https://console.cloud.google.com/apis/library\n`
+        + `  - Gmail API\n`
+        + `  - Google Calendar API\n`
+        + `  - Google Drive API\n`;
+    }
+
+    throw new Error(`Token refresh failed (${response.status}): ${desc}${hint}`);
+  }
+
+  const data = await response.json();
+  cachedAccessToken = data.access_token;
+  tokenExpiry = Date.now() + (data.expires_in * 1000);
+  return cachedAccessToken;
+}
+
+// ============================================================================
+// HTTP CLIENT
+// ============================================================================
+
+async function request(method, url, body = null, queryParams = null, options = {}) {
+  const token = await getAccessToken();
+
+  if (queryParams) {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(queryParams)) {
+      if (value !== undefined && value !== null) {
+        if (Array.isArray(value)) {
+          // For repeated params (e.g., fields)
+          for (const v of value) params.append(key, String(v));
+        } else {
+          params.append(key, String(value));
+        }
+      }
+    }
+    const qs = params.toString();
+    if (qs) url += (url.includes('?') ? '&' : '?') + qs;
+  }
+
+  const fetchOptions = {
+    method,
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Accept': 'application/json',
+      ...options.headers
+    }
+  };
+
+  if (body && typeof body === 'string') {
+    fetchOptions.body = body;
+  } else if (body) {
+    fetchOptions.headers['Content-Type'] = 'application/json';
+    fetchOptions.body = JSON.stringify(body);
+  }
+
+  const response = await fetch(url, fetchOptions);
+
+  if (!response.ok) {
+    const text = await response.text();
+    let errorDetail = text;
+    try {
+      errorDetail = JSON.stringify(JSON.parse(text), null, 2);
+    } catch (e) { /* Use raw text */ }
+    throw new Error(`${method} ${url} failed (${response.status}):\n${errorDetail}`);
+  }
+
+  if (response.status === 204) return null;
+
+  if (options.raw) {
+    return response;
+  }
+
+  const text = await response.text();
+  return text ? JSON.parse(text) : null;
+}
+
+// ============================================================================
+// GMAIL API
+// ============================================================================
+
+const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
+
+const gmail = {
+  messages: {
+    list: (options = {}) => request('GET', `${GMAIL_BASE}/messages`, null, {
+      q: options.query || undefined,
+      maxResults: options.maxResults || 20,
+      pageToken: options.pageToken || undefined,
+      labelIds: options.labelIds?.join(',') || undefined
+    }),
+
+    get: (id, options = {}) => request('GET', `${GMAIL_BASE}/messages/${id}`, null, {
+      format: options.format || 'full'
+    }),
+
+    getBody: async (id) => {
+      const msg = await request('GET', `${GMAIL_BASE}/messages/${id}`, null, { format: 'full' });
+      return extractBody(msg);
+    },
+
+    search: async (query, options = {}) => {
+      const result = await request('GET', `${GMAIL_BASE}/messages`, null, {
+        q: query,
+        maxResults: options.maxResults || 10,
+        pageToken: options.pageToken || undefined
+      });
+      if (!result.messages) return { messages: [], resultSizeEstimate: 0 };
+
+      const messages = [];
+      for (const stub of result.messages) {
+        const msg = await request('GET', `${GMAIL_BASE}/messages/${stub.id}`, null, {
+          format: options.format || 'metadata',
+          metadataHeaders: options.metadataHeaders?.join('&metadataHeaders=') || 'From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date'
+        });
+        messages.push(msg);
+      }
+      return {
+        messages,
+        nextPageToken: result.nextPageToken,
+        resultSizeEstimate: result.resultSizeEstimate
+      };
+    },
+
+    getAttachment: (messageId, attachmentId) =>
+      request('GET', `${GMAIL_BASE}/messages/${messageId}/attachments/${attachmentId}`)
+  },
+
+  labels: {
+    list: () => request('GET', `${GMAIL_BASE}/labels`),
+    get: (id) => request('GET', `${GMAIL_BASE}/labels/${id}`)
+  },
+
+  threads: {
+    list: (options = {}) => request('GET', `${GMAIL_BASE}/threads`, null, {
+      q: options.query || undefined,
+      maxResults: options.maxResults || 20,
+      pageToken: options.pageToken || undefined
+    }),
+    get: (id, options = {}) => request('GET', `${GMAIL_BASE}/threads/${id}`, null, {
+      format: options.format || 'full'
+    })
+  }
+};
+
+// Helper to extract readable body from a Gmail message
+function extractBody(msg) {
+  const headers = {};
+  for (const h of msg.payload?.headers || []) {
+    headers[h.name.toLowerCase()] = h.value;
+  }
+
+  function decodeBase64Url(data) {
+    return Buffer.from(data.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf-8');
+  }
+
+  function findParts(payload, mimeType) {
+    const results = [];
+    if (payload.mimeType === mimeType && payload.body?.data) {
+      results.push(decodeBase64Url(payload.body.data));
+    }
+    if (payload.parts) {
+      for (const part of payload.parts) {
+        results.push(...findParts(part, mimeType));
+      }
+    }
+    return results;
+  }
+
+  function findAttachments(payload) {
+    const attachments = [];
+    if (payload.filename && payload.body?.attachmentId) {
+      attachments.push({
+        filename: payload.filename,
+        mimeType: payload.mimeType,
+        size: payload.body.size,
+        attachmentId: payload.body.attachmentId
+      });
+    }
+    if (payload.parts) {
+      for (const part of payload.parts) {
+        attachments.push(...findAttachments(part));
+      }
+    }
+    return attachments;
+  }
+
+  const textParts = findParts(msg.payload, 'text/plain');
+  const htmlParts = findParts(msg.payload, 'text/html');
+  const attachments = findAttachments(msg.payload);
+
+  return {
+    id: msg.id,
+    threadId: msg.threadId,
+    subject: headers['subject'] || '(no subject)',
+    from: headers['from'] || '',
+    to: headers['to'] || '',
+    date: headers['date'] || '',
+    text: textParts.join('\n'),
+    html: htmlParts.join('\n'),
+    attachments,
+    snippet: msg.snippet,
+    labelIds: msg.labelIds
+  };
+}
+
+// ============================================================================
+// GOOGLE CALENDAR API
+// ============================================================================
+
+const CALENDAR_BASE = 'https://www.googleapis.com/calendar/v3';
+
+const calendar = {
+  calendars: {
+    list: () => request('GET', `${CALENDAR_BASE}/users/me/calendarList`),
+    get: (calendarId = 'primary') => request('GET', `${CALENDAR_BASE}/calendars/${encodeURIComponent(calendarId)}`)
+  },
+
+  events: {
+    list: (options = {}) => {
+      const calendarId = options.calendarId || 'primary';
+      return request('GET', `${CALENDAR_BASE}/calendars/${encodeURIComponent(calendarId)}/events`, null, {
+        timeMin: options.timeMin || undefined,
+        timeMax: options.timeMax || undefined,
+        maxResults: options.maxResults || 50,
+        singleEvents: options.singleEvents !== false ? 'true' : 'false',
+        orderBy: options.orderBy || 'startTime',
+        q: options.query || undefined,
+        pageToken: options.pageToken || undefined
+      });
+    },
+
+    get: (eventId, options = {}) => {
+      const calendarId = options.calendarId || 'primary';
+      return request('GET', `${CALENDAR_BASE}/calendars/${encodeURIComponent(calendarId)}/events/${eventId}`);
+    },
+
+    search: (query, options = {}) => {
+      const calendarId = options.calendarId || 'primary';
+      return request('GET', `${CALENDAR_BASE}/calendars/${encodeURIComponent(calendarId)}/events`, null, {
+        q: query,
+        timeMin: options.timeMin || undefined,
+        timeMax: options.timeMax || undefined,
+        maxResults: options.maxResults || 20,
+        singleEvents: 'true',
+        orderBy: 'startTime',
+        pageToken: options.pageToken || undefined
+      });
+    }
+  }
+};
+
+// ============================================================================
+// GOOGLE DRIVE API
+// ============================================================================
+
+const DRIVE_BASE = 'https://www.googleapis.com/drive/v3';
+
+const drive = {
+  files: {
+    list: (options = {}) => request('GET', `${DRIVE_BASE}/files`, null, {
+      q: options.query || undefined,
+      pageSize: options.pageSize || 20,
+      fields: options.fields || 'nextPageToken, files(id, name, mimeType, modifiedTime, size, webViewLink, parents)',
+      orderBy: options.orderBy || 'modifiedTime desc',
+      pageToken: options.pageToken || undefined,
+      spaces: options.spaces || 'drive',
+      supportsAllDrives: options.includeSharedDrives ? 'true' : undefined,
+      includeItemsFromAllDrives: options.includeSharedDrives ? 'true' : undefined
+    }),
+
+    get: (fileId, options = {}) => request('GET', `${DRIVE_BASE}/files/${fileId}`, null, {
+      fields: options.fields || 'id, name, mimeType, modifiedTime, size, webViewLink, parents, description',
+      supportsAllDrives: 'true'
+    }),
+
+    getContent: async (fileId) => {
+      const token = await getAccessToken();
+      const response = await fetch(`${DRIVE_BASE}/files/${fileId}?alt=media`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!response.ok) {
+        throw new Error(`Download failed (${response.status}): ${await response.text()}`);
+      }
+      return response.text();
+    },
+
+    exportAsText: async (fileId, mimeType = 'text/plain') => {
+      const token = await getAccessToken();
+      const response = await fetch(`${DRIVE_BASE}/files/${fileId}/export?mimeType=${encodeURIComponent(mimeType)}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!response.ok) {
+        throw new Error(`Export failed (${response.status}): ${await response.text()}`);
+      }
+      return response.text();
+    },
+
+    search: (name, options = {}) => {
+      const conditions = [`name contains '${name.replace(/'/g, "\\'")}'`];
+      if (options.mimeType) conditions.push(`mimeType = '${options.mimeType}'`);
+      if (options.folderId) conditions.push(`'${options.folderId}' in parents`);
+      conditions.push('trashed = false');
+
+      return drive.files.list({
+        query: conditions.join(' and '),
+        pageSize: options.pageSize || 20,
+        fields: options.fields,
+        includeSharedDrives: options.includeSharedDrives
+      });
+    }
+  },
+
+  permissions: {
+    list: (fileId) => request('GET', `${DRIVE_BASE}/files/${fileId}/permissions`, null, {
+      fields: 'permissions(id, type, role, emailAddress, displayName)',
+      supportsAllDrives: 'true'
+    })
+  },
+
+  about: {
+    get: () => request('GET', `${DRIVE_BASE}/about`, null, {
+      fields: 'user, storageQuota'
+    })
+  }
+};
+
+// ============================================================================
+// COMBINED API OBJECT
+// ============================================================================
+
+const api = { gmail, calendar, drive };
+
+// ============================================================================
+// EXECUTE CODE FROM STDIN
+// ============================================================================
+
+async function main() {
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  const code = Buffer.concat(chunks).toString('utf-8');
+
+  if (!code.trim()) {
+    console.error('No code provided via stdin');
+    process.exit(1);
+  }
+
+  const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+  const fn = new AsyncFunction('api', 'gmail', 'calendar', 'drive', code);
+  await fn(api, gmail, calendar, drive);
+}
+
+main().catch(err => {
+  console.error('Error:', err.message);
+  process.exit(1);
+});

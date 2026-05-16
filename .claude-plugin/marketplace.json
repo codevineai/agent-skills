@@ -31,6 +31,12 @@
       "source": "./confluence",
       "description": "Search, read, and create Confluence pages. Search with CQL, browse spaces, get page content, manage child pages, and create documentation.",
       "keywords": ["confluence", "documentation", "wiki", "atlassian"]
+    },
+    {
+      "name": "google-workspace",
+      "source": "./google-workspace",
+      "description": "Read-only access to Gmail, Google Calendar, and Google Drive. Search emails, check calendar events, read Drive documents, and retrieve Gemini meeting transcripts.",
+      "keywords": ["google", "gmail", "calendar", "drive", "workspace"]
     }
   ]
 }

@@ -1,0 +1,9 @@
+{
+  "name": "google-workspace",
+  "version": "1.0.0",
+  "description": "Read-only access to Gmail, Google Calendar, and Google Drive. Search emails, check calendar events, read Drive documents, and retrieve Gemini meeting transcripts.",
+  "author": {
+    "name": "CodeVine AI"
+  },
+  "keywords": ["google", "gmail", "calendar", "drive", "workspace"]
+}
