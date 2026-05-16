@@ -1,0 +1,9 @@
+{
+  "name": "skill-builder",
+  "version": "1.0.0",
+  "description": "Build API skills for Claude Code using TypeScript interfaces instead of MCP servers. Use this when creating new skills that wrap REST APIs.",
+  "author": {
+    "name": "CodeVine AI"
+  },
+  "keywords": ["skill", "builder", "template", "api"]
+}

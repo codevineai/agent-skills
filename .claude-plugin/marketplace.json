@@ -13,6 +13,12 @@
       "source": "./jira",
       "description": "Query and manage Jira issues - search, create, bulk create, update, comment, link, transition status, and look up users.",
       "keywords": ["jira", "issues", "project-management"]
+    },
+    {
+      "name": "skill-builder",
+      "source": "./skill-builder",
+      "description": "Build API skills for Claude Code using TypeScript interfaces instead of MCP servers. Use this when creating new skills that wrap REST APIs.",
+      "keywords": ["skill", "builder", "template", "api"]
     }
   ]
 }
