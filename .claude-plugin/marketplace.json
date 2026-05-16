@@ -25,6 +25,12 @@
       "source": "./slack",
       "description": "Send messages, read channels, and manage conversations in Slack directly from Claude Code. Post to channels, reply in threads, send DMs, search messages, add reactions, and manage channel membership.",
       "keywords": ["slack", "messaging", "channels"]
+    },
+    {
+      "name": "confluence",
+      "source": "./confluence",
+      "description": "Search, read, and create Confluence pages. Search with CQL, browse spaces, get page content, manage child pages, and create documentation.",
+      "keywords": ["confluence", "documentation", "wiki", "atlassian"]
     }
   ]
 }

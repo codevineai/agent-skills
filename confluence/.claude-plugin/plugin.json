@@ -1,0 +1,9 @@
+{
+  "name": "confluence",
+  "version": "1.0.0",
+  "description": "Search, read, and create Confluence pages. Search with CQL, browse spaces, get page content, manage child pages, and create documentation.",
+  "author": {
+    "name": "CodeVine AI"
+  },
+  "keywords": ["confluence", "documentation", "wiki", "atlassian"]
+}
