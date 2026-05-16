@@ -71,7 +71,7 @@ function getCredentials(platform, keys) {
   const values = {};
   const missing = [];
 
-  const profile = process.env.CODEVINE_PROFILE || 'default';
+  const profile = process.env.JIRA_PROFILE || 'default';
   const { profiles, path: credsPath } = loadCredentialsFile(platform);
   const profileData = profiles[profile] || {};
 
@@ -99,7 +99,7 @@ function getCredentials(platform, keys) {
     error += `\nOption 2 - Credentials file (~/.${platform}/credentials):\n`;
     error += `   [default]\n   ${exampleKeys}\n`;
     error += `\nGet your API token from: https://id.atlassian.com/manage-profile/security/api-tokens\n`;
-    error += `\nTo use a profile: export CODEVINE_PROFILE=work\n`;
+    error += `\nTo use a profile: export JIRA_PROFILE=work\n`;
     throw new Error(error);
   }
 
