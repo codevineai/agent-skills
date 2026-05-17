@@ -37,6 +37,12 @@
       "source": "./google-workspace",
       "description": "Read-only access to Gmail, Google Calendar, and Google Drive. Search emails, check calendar events, read Drive documents, and retrieve Gemini meeting transcripts.",
       "keywords": ["google", "gmail", "calendar", "drive", "workspace"]
+    },
+    {
+      "name": "sonarqube",
+      "source": "./sonarqube",
+      "description": "Fetch and analyze SonarQube code quality data - issues, quality gates, metrics, and project health.",
+      "keywords": ["sonarqube", "code-quality", "testing", "security"]
     }
   ]
 }

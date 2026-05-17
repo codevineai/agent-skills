@@ -1,0 +1,14 @@
+{
+  "name": "sonarqube",
+  "version": "1.0.0",
+  "description": "Fetch and analyze SonarQube code quality data - issues, quality gates, metrics, and project health.",
+  "author": {
+    "name": "CodeVine AI"
+  },
+  "keywords": [
+    "sonarqube",
+    "code-quality",
+    "testing",
+    "security"
+  ]
+}
