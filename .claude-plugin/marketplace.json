@@ -43,6 +43,12 @@
       "source": "./sonarqube",
       "description": "Fetch and analyze SonarQube code quality data - issues, quality gates, metrics, and project health.",
       "keywords": ["sonarqube", "code-quality", "testing", "security"]
+    },
+    {
+      "name": "codevine-mcp-stdio",
+      "source": "./codevine-mcp-stdio",
+      "description": "Stdio MCP server for clients that don't support skills (Claude Desktop, Cursor, Windsurf). Not needed for Claude Code — use the codevine skill instead.",
+      "keywords": ["mcp", "codevine", "stdio"]
     }
   ]
 }

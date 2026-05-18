@@ -1,0 +1,9 @@
+{
+  "name": "CodeVine MCP Server",
+  "description": "Stdio MCP server for clients that don't support skills (e.g. Claude Desktop, Cursor, Windsurf). Provides read-only access to CodeVine sessions, projects, users, plugins, and reporting views. Not needed for Claude Code — use the codevine skill instead.",
+  "version": "1.0.0",
+  "keywords": ["mcp", "codevine", "stdio"],
+  "author": {
+    "name": "CodeVine AI"
+  }
+}
