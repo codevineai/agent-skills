@@ -19,45 +19,99 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { URL } from 'url';
+import { exec } from 'child_process';
 
 const SCOPES = [
-  'https://www.googleapis.com/auth/gmail.readonly',
-  'https://www.googleapis.com/auth/calendar.readonly',
-  'https://www.googleapis.com/auth/drive.readonly'
+  'https://www.googleapis.com/auth/gmail.modify',
+  'https://www.googleapis.com/auth/calendar',
+  'https://www.googleapis.com/auth/drive.readonly',
+  'https://www.googleapis.com/auth/contacts.readonly',
+  'https://www.googleapis.com/auth/contacts.other.readonly'
 ].join(' ');
 
 const REDIRECT_PORT = 8089;
 const REDIRECT_URI = `http://localhost:${REDIRECT_PORT}/callback`;
 
+function parseIniFile(content) {
+  const profiles = {};
+  let currentProfile = 'default';
+
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith(';')) continue;
+
+    const profileMatch = trimmed.match(/^\[([^\]]+)\]$/);
+    if (profileMatch) {
+      currentProfile = profileMatch[1].trim();
+      if (!profiles[currentProfile]) profiles[currentProfile] = {};
+      continue;
+    }
+
+    const eqIndex = trimmed.indexOf('=');
+    if (eqIndex > 0) {
+      const key = trimmed.slice(0, eqIndex).trim();
+      const value = trimmed.slice(eqIndex + 1).trim();
+      if (!profiles[currentProfile]) profiles[currentProfile] = {};
+      profiles[currentProfile][key] = value;
+    }
+  }
+  return profiles;
+}
+
+function serializeIniFile(profiles) {
+  const sections = [];
+  // Write [default] first if it exists
+  if (profiles['default']) {
+    sections.push(serializeSection('default', profiles['default']));
+  }
+  for (const [name, data] of Object.entries(profiles)) {
+    if (name === 'default') continue;
+    sections.push(serializeSection(name, data));
+  }
+  return sections.join('\n');
+}
+
+function serializeSection(name, data) {
+  let out = `[${name}]\n`;
+  for (const [key, value] of Object.entries(data)) {
+    out += `${key}=${value}\n`;
+  }
+  return out;
+}
+
 async function setup() {
   const credsDir = join(homedir(), '.google-workspace');
   const credsFile = join(credsDir, 'credentials');
+
+  // Parse --profile argument
+  const profileArg = process.argv.find(a => a.startsWith('--profile='));
+  const profileIdx = process.argv.indexOf('--profile');
+  const profileName = profileArg ? profileArg.split('=')[1] : (profileIdx >= 0 ? process.argv[profileIdx + 1] : 'default');
 
   // Shared OAuth client — Desktop app type, client secret is not confidential per Google's docs.
   const DEFAULT_CLIENT_ID = '797454094219-uq1uhvee4p35es9r9k8rt2ph7ac5tbsj.apps.googleusercontent.com';
   const DEFAULT_CLIENT_SECRET = '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';
 
-  // Check for overrides in env or credentials file
+  // Load existing profiles so we don't overwrite them
+  let profiles = {};
+  if (existsSync(credsFile)) {
+    const content = readFileSync(credsFile, 'utf-8');
+    profiles = parseIniFile(content);
+  }
+
+  // Check for overrides in env or existing profile credentials
   let clientId = process.env.GOOGLE_CLIENT_ID || '';
   let clientSecret = process.env.GOOGLE_CLIENT_SECRET || '';
 
-  if (existsSync(credsFile)) {
-    const content = readFileSync(credsFile, 'utf-8');
-    for (const line of content.split('\n')) {
-      const eq = line.indexOf('=');
-      if (eq > 0) {
-        const key = line.slice(0, eq).trim();
-        const value = line.slice(eq + 1).trim();
-        if (key === 'GOOGLE_CLIENT_ID' && !clientId) clientId = value;
-        if (key === 'GOOGLE_CLIENT_SECRET' && !clientSecret) clientSecret = value;
-      }
-    }
-  }
+  const existingProfile = profiles[profileName] || {};
+  if (!clientId && existingProfile.GOOGLE_CLIENT_ID) clientId = existingProfile.GOOGLE_CLIENT_ID;
+  if (!clientSecret && existingProfile.GOOGLE_CLIENT_SECRET) clientSecret = existingProfile.GOOGLE_CLIENT_SECRET;
 
   // Fall back to built-in defaults
   if (!clientId) clientId = DEFAULT_CLIENT_ID;
   if (!clientSecret) clientSecret = DEFAULT_CLIENT_SECRET;
 
+  console.log(`Setting up profile: ${profileName}`);
   console.log('Starting OAuth flow...');
   console.log('');
 
@@ -95,7 +149,11 @@ async function setup() {
     });
 
     server.listen(REDIRECT_PORT, () => {
-      console.log(`Open this URL in your browser:\n\n${authUrl.toString()}\n`);
+      const url = authUrl.toString();
+      console.log(`Opening browser for authorization...\n\n${url}\n`);
+      // Open browser automatically — macOS: open, Linux: xdg-open, Windows: start
+      const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+      exec(`${cmd} "${url}"`);
       console.log('Waiting for authorization...');
     });
 
@@ -132,20 +190,24 @@ async function setup() {
     throw new Error('No refresh token received. Try revoking access at https://myaccount.google.com/permissions and running setup again.');
   }
 
-  // Save credentials
+  // Save credentials — update only the target profile, preserve others
   if (!existsSync(credsDir)) mkdirSync(credsDir, { recursive: true });
 
-  // Only write client ID/secret if they differ from the built-in defaults
-  let credsContent = '[default]\n';
-  if (clientId !== DEFAULT_CLIENT_ID) credsContent += `GOOGLE_CLIENT_ID=${clientId}\n`;
-  if (clientSecret !== DEFAULT_CLIENT_SECRET) credsContent += `GOOGLE_CLIENT_SECRET=${clientSecret}\n`;
-  credsContent += `GOOGLE_REFRESH_TOKEN=${tokens.refresh_token}\n`;
+  const newProfileData = {};
+  if (clientId !== DEFAULT_CLIENT_ID) newProfileData.GOOGLE_CLIENT_ID = clientId;
+  if (clientSecret !== DEFAULT_CLIENT_SECRET) newProfileData.GOOGLE_CLIENT_SECRET = clientSecret;
+  newProfileData.GOOGLE_REFRESH_TOKEN = tokens.refresh_token;
 
-  writeFileSync(credsFile, credsContent, { mode: 0o600 });
+  profiles[profileName] = newProfileData;
+
+  writeFileSync(credsFile, serializeIniFile(profiles), { mode: 0o600 });
 
   console.log('');
-  console.log(`Credentials saved to ${credsFile}`);
+  console.log(`Credentials saved to ${credsFile} [${profileName}]`);
   console.log('Setup complete! The Google Workspace skill is ready to use.');
+  if (profileName !== 'default') {
+    console.log(`\nTo use this profile, set: export GOOGLE_PROFILE=${profileName}`);
+  }
 }
 
 setup().catch(err => {

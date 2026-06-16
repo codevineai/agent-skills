@@ -249,8 +249,58 @@ interface GmailThreadsAPI {
   get(id: string, options?: { format?: 'full' | 'metadata' | 'minimal' }): Promise<GmailThread>;
 }
 
+// ============================================================================
+// GMAIL WRITE OPERATIONS
+// ============================================================================
+
+interface GmailModifyOptions {
+  addLabelIds?: string[];
+  removeLabelIds?: string[];
+}
+
+interface GmailBatchModifyOptions {
+  ids: string[];
+  addLabelIds?: string[];
+  removeLabelIds?: string[];
+}
+
 interface GmailAPI {
-  messages: GmailMessagesAPI;
+  messages: GmailMessagesAPI & {
+    /** Modify labels on a message (add/remove labels) */
+    modify(id: string, options: GmailModifyOptions): Promise<any>;
+    /** Modify labels on multiple messages at once (max 1000 per call) */
+    batchModify(options: GmailBatchModifyOptions): Promise<any>;
+    /** Move a message to trash */
+    trash(id: string): Promise<any>;
+    /** Permanently delete messages (cannot be undone!) */
+    batchDelete(ids: string[]): Promise<any>;
+  };
   labels: GmailLabelsAPI;
   threads: GmailThreadsAPI;
+
+  /**
+   * Get or create a Gmail label by name. Returns the label ID.
+   * Caches label lookups for the lifetime of the script.
+   *
+   * @param labelName - The label name (e.g., "Jira", "Notifications", "AI Detected Spam")
+   * @returns The label ID string
+   *
+   * @example
+   * const labelId = await gmail.ensureLabel('Notifications');
+   * await gmail.messages.modify(msgId, { addLabelIds: [labelId], removeLabelIds: ['INBOX'] });
+   */
+  ensureLabel(labelName: string): Promise<string>;
+
+  /**
+   * Add a sender email or *@domain pattern to the permanent banished list
+   * in ~/.google-workspace/inbox-rules.md. Entries in this list should be
+   * treated as permanently blocked by any inbox processing workflow.
+   *
+   * @param emailOrDomain - Exact email or wildcard domain (e.g., "*@spamdomain.com")
+   *
+   * @example
+   * await gmail.banishSender('spammer@coldoutreach.io');
+   * await gmail.banishSender('*@coldoutreach.io'); // block entire domain
+   */
+  banishSender(emailOrDomain: string): Promise<void>;
 }

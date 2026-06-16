@@ -294,7 +294,17 @@ const gmail = {
     },
 
     getAttachment: (messageId, attachmentId) =>
-      request('GET', `${GMAIL_BASE}/messages/${messageId}/attachments/${attachmentId}`)
+      request('GET', `${GMAIL_BASE}/messages/${messageId}/attachments/${attachmentId}`),
+
+    modify: (id, { addLabelIds = [], removeLabelIds = [] } = {}) =>
+      request('POST', `${GMAIL_BASE}/messages/${id}/modify`, { addLabelIds, removeLabelIds }),
+
+    batchModify: ({ ids, addLabelIds = [], removeLabelIds = [] } = {}) =>
+      request('POST', `${GMAIL_BASE}/messages/batchModify`, { ids, addLabelIds, removeLabelIds }),
+
+    trash: (id) => request('POST', `${GMAIL_BASE}/messages/${id}/trash`),
+
+    batchDelete: (ids) => request('POST', `${GMAIL_BASE}/messages/batchDelete`, { ids })
   },
 
   labels: {
@@ -417,6 +427,11 @@ const calendar = {
         orderBy: 'startTime',
         pageToken: options.pageToken || undefined
       });
+    },
+
+    delete: (eventId, options = {}) => {
+      const calendarId = options.calendarId || 'primary';
+      return request('DELETE', `${CALENDAR_BASE}/calendars/${encodeURIComponent(calendarId)}/events/${eventId}`);
     }
   }
 };
@@ -497,10 +512,312 @@ const drive = {
 };
 
 // ============================================================================
+// GOOGLE PEOPLE API
+// ============================================================================
+
+const PEOPLE_BASE = 'https://people.googleapis.com/v1';
+const CONTACTS_CACHE_PATH = join(homedir(), '.google-workspace', 'contacts-cache.json');
+
+// ---- Known Senders Cache (lazy-loaded, singleton per script run) ----
+
+let _knownSendersSet = null;   // Set<string> — lowercase emails
+let _cacheData = null;         // raw JSON structure
+let _syncDone = false;         // ensures sync happens only once per run
+
+function loadCache() {
+  try {
+    if (existsSync(CONTACTS_CACHE_PATH)) {
+      return JSON.parse(readFileSync(CONTACTS_CACHE_PATH, 'utf-8'));
+    }
+  } catch (e) { /* corrupt file — start fresh */ }
+  return { connectionsSyncToken: null, otherContactsSyncToken: null, lastSync: null, syncedEmails: [], manualEmails: [] };
+}
+
+function saveCache(data) {
+  const dir = join(homedir(), '.google-workspace');
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  writeFileSync(CONTACTS_CACHE_PATH, JSON.stringify(data, null, 2), { mode: 0o600 });
+}
+
+function extractEmails(person) {
+  return (person.emailAddresses || []).map(e => e.value.toLowerCase());
+}
+
+async function fullSyncConnections() {
+  const emails = [];
+  let pageToken = undefined;
+  let syncToken = null;
+  do {
+    const result = await request('GET', `${PEOPLE_BASE}/people/me/connections`, null, {
+      personFields: 'emailAddresses',
+      pageSize: 1000,
+      pageToken,
+      requestSyncToken: 'true'
+    });
+    if (result.connections) {
+      for (const c of result.connections) emails.push(...extractEmails(c));
+    }
+    pageToken = result.nextPageToken;
+    if (result.nextSyncToken) syncToken = result.nextSyncToken;
+  } while (pageToken);
+  return { emails, syncToken };
+}
+
+async function incrementalSyncConnections(syncToken) {
+  const added = [];
+  const removed = [];
+  let pageToken = undefined;
+  let newSyncToken = null;
+  do {
+    const result = await request('GET', `${PEOPLE_BASE}/people/me/connections`, null, {
+      personFields: 'emailAddresses',
+      pageSize: 1000,
+      pageToken,
+      requestSyncToken: 'true',
+      syncToken
+    });
+    if (result.connections) {
+      for (const c of result.connections) {
+        const emails = extractEmails(c);
+        if (c.metadata?.deleted) {
+          removed.push(...emails);
+        } else {
+          added.push(...emails);
+        }
+      }
+    }
+    pageToken = result.nextPageToken;
+    if (result.nextSyncToken) newSyncToken = result.nextSyncToken;
+  } while (pageToken);
+  return { added, removed, syncToken: newSyncToken };
+}
+
+async function fullSyncOtherContacts() {
+  const emails = [];
+  let pageToken = undefined;
+  let syncToken = null;
+  do {
+    const result = await request('GET', `${PEOPLE_BASE}/otherContacts`, null, {
+      readMask: 'emailAddresses',
+      pageSize: 1000,
+      pageToken,
+      requestSyncToken: 'true'
+    });
+    if (result.otherContacts) {
+      for (const c of result.otherContacts) emails.push(...extractEmails(c));
+    }
+    pageToken = result.nextPageToken;
+    if (result.nextSyncToken) syncToken = result.nextSyncToken;
+  } while (pageToken);
+  return { emails, syncToken };
+}
+
+async function incrementalSyncOtherContacts(syncToken) {
+  const added = [];
+  const removed = [];
+  let pageToken = undefined;
+  let newSyncToken = null;
+  do {
+    const result = await request('GET', `${PEOPLE_BASE}/otherContacts`, null, {
+      readMask: 'emailAddresses',
+      pageSize: 1000,
+      pageToken,
+      requestSyncToken: 'true',
+      syncToken
+    });
+    if (result.otherContacts) {
+      for (const c of result.otherContacts) {
+        const emails = extractEmails(c);
+        if (c.metadata?.deleted) {
+          removed.push(...emails);
+        } else {
+          added.push(...emails);
+        }
+      }
+    }
+    pageToken = result.nextPageToken;
+    if (result.nextSyncToken) newSyncToken = result.nextSyncToken;
+  } while (pageToken);
+  return { added, removed, syncToken: newSyncToken };
+}
+
+async function syncKnownSenders() {
+  if (_syncDone) return;
+  _syncDone = true;
+
+  _cacheData = loadCache();
+  const existingSynced = new Set(_cacheData.syncedEmails || []);
+
+  // --- Connections sync ---
+  if (_cacheData.connectionsSyncToken) {
+    try {
+      const delta = await incrementalSyncConnections(_cacheData.connectionsSyncToken);
+      for (const e of delta.added) existingSynced.add(e);
+      for (const e of delta.removed) existingSynced.delete(e);
+      _cacheData.connectionsSyncToken = delta.syncToken || _cacheData.connectionsSyncToken;
+    } catch (err) {
+      if (err.message.includes('410') || err.message.includes('GONE') || err.message.includes('Sync token')) {
+        // Token expired — full re-sync, but keep existing emails until replaced
+        const full = await fullSyncConnections();
+        // Don't clear — merge new full set with existing (other contacts still there)
+        // But we do want to replace connections portion. We can't distinguish, so just add all.
+        for (const e of full.emails) existingSynced.add(e);
+        _cacheData.connectionsSyncToken = full.syncToken;
+      } else {
+        throw err;
+      }
+    }
+  } else {
+    const full = await fullSyncConnections();
+    for (const e of full.emails) existingSynced.add(e);
+    _cacheData.connectionsSyncToken = full.syncToken;
+  }
+
+  // --- Other Contacts sync ---
+  if (_cacheData.otherContactsSyncToken) {
+    try {
+      const delta = await incrementalSyncOtherContacts(_cacheData.otherContactsSyncToken);
+      for (const e of delta.added) existingSynced.add(e);
+      for (const e of delta.removed) existingSynced.delete(e);
+      _cacheData.otherContactsSyncToken = delta.syncToken || _cacheData.otherContactsSyncToken;
+    } catch (err) {
+      if (err.message.includes('410') || err.message.includes('GONE') || err.message.includes('Sync token')) {
+        const full = await fullSyncOtherContacts();
+        for (const e of full.emails) existingSynced.add(e);
+        _cacheData.otherContactsSyncToken = full.syncToken;
+      } else {
+        throw err;
+      }
+    }
+  } else {
+    const full = await fullSyncOtherContacts();
+    for (const e of full.emails) existingSynced.add(e);
+    _cacheData.otherContactsSyncToken = full.syncToken;
+  }
+
+  // Save synced emails back
+  _cacheData.syncedEmails = [...existingSynced].sort();
+  _cacheData.lastSync = new Date().toISOString();
+  saveCache(_cacheData);
+
+  // Build in-memory set: union of synced + manual
+  _knownSendersSet = new Set([..._cacheData.syncedEmails, ...(_cacheData.manualEmails || [])]);
+}
+
+const people = {
+  connections: {
+    list: async (options = {}) => {
+      const allContacts = [];
+      let pageToken = undefined;
+      do {
+        const result = await request('GET', `${PEOPLE_BASE}/people/me/connections`, null, {
+          personFields: options.personFields || 'names,emailAddresses',
+          pageSize: options.pageSize || 1000,
+          pageToken
+        });
+        if (result.connections) allContacts.push(...result.connections);
+        pageToken = result.nextPageToken;
+      } while (pageToken && !options.singlePage);
+      return { connections: allContacts };
+    }
+  },
+
+  otherContacts: {
+    list: async (options = {}) => {
+      const allContacts = [];
+      let pageToken = undefined;
+      do {
+        const result = await request('GET', `${PEOPLE_BASE}/otherContacts`, null, {
+          readMask: options.readMask || 'names,emailAddresses',
+          pageSize: options.pageSize || 1000,
+          pageToken
+        });
+        if (result.otherContacts) allContacts.push(...result.otherContacts);
+        pageToken = result.nextPageToken;
+      } while (pageToken && !options.singlePage);
+      return { otherContacts: allContacts };
+    },
+
+    search: (query, options = {}) => request('GET', `${PEOPLE_BASE}/otherContacts:search`, null, {
+      query,
+      readMask: options.readMask || 'names,emailAddresses',
+      pageSize: options.pageSize || 30
+    })
+  },
+
+  isKnownSender: async (email) => {
+    await syncKnownSenders();
+    return _knownSendersSet.has(email.toLowerCase());
+  },
+
+  addKnownSender: async (email) => {
+    await syncKnownSenders();
+    const lower = email.toLowerCase();
+    _knownSendersSet.add(lower);
+    if (!_cacheData.manualEmails) _cacheData.manualEmails = [];
+    if (!_cacheData.manualEmails.includes(lower)) {
+      _cacheData.manualEmails.push(lower);
+      _cacheData.manualEmails.sort();
+      saveCache(_cacheData);
+    }
+  }
+};
+
+// ============================================================================
+// GMAIL UTILITY HELPERS
+// ============================================================================
+
+const RULES_PATH = join(homedir(), '.google-workspace', 'inbox-rules.md');
+
+// Label cache: name -> id
+let _labelCache = null;
+
+async function ensureLabel(labelName) {
+  if (!_labelCache) {
+    const result = await gmail.labels.list();
+    _labelCache = {};
+    for (const l of result.labels) _labelCache[l.name] = l.id;
+  }
+  if (_labelCache[labelName]) return _labelCache[labelName];
+
+  // Create the label
+  const created = await request('POST', `${GMAIL_BASE}/labels`, {
+    name: labelName,
+    labelListVisibility: 'labelShow',
+    messageListVisibility: 'show'
+  });
+  _labelCache[created.name] = created.id;
+  return created.id;
+}
+
+// Attach ensureLabel to gmail object
+gmail.ensureLabel = ensureLabel;
+
+// Banish sender — appends to the Banished Senders section of inbox-rules.md
+gmail.banishSender = async (emailOrDomain) => {
+  if (!existsSync(RULES_PATH)) return;
+  let content = readFileSync(RULES_PATH, 'utf-8');
+  const lower = emailOrDomain.toLowerCase();
+
+  // Find end of banished section (next ## heading)
+  const banishedIdx = content.indexOf('## Banished Senders');
+  if (banishedIdx === -1) return;
+  const afterBanished = content.indexOf('\n## ', banishedIdx + 1);
+
+  const beforeNext = afterBanished === -1 ? content : content.slice(0, afterBanished);
+  const rest = afterBanished === -1 ? '' : content.slice(afterBanished);
+
+  if (beforeNext.includes(lower)) return; // already there
+
+  content = beforeNext.trimEnd() + '\n- ' + lower + '\n' + rest;
+  writeFileSync(RULES_PATH, content);
+};
+
+// ============================================================================
 // COMBINED API OBJECT
 // ============================================================================
 
-const api = { gmail, calendar, drive };
+const api = { gmail, calendar, drive, people };
 
 // ============================================================================
 // EXECUTE CODE FROM STDIN
@@ -517,8 +834,8 @@ async function main() {
   }
 
   const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-  const fn = new AsyncFunction('api', 'gmail', 'calendar', 'drive', code);
-  await fn(api, gmail, calendar, drive);
+  const fn = new AsyncFunction('api', 'gmail', 'calendar', 'drive', 'people', code);
+  await fn(api, gmail, calendar, drive, people);
 }
 
 main().catch(err => {

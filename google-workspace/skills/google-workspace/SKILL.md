@@ -1,11 +1,11 @@
 ---
 name: google-workspace
-description: Access Google Gmail, Calendar, and Drive APIs. Use this when users need to read emails, check calendar events, search/read Drive documents, or retrieve Gemini meeting transcripts.
+description: Access Google Gmail, Calendar, Drive, and Contacts APIs. Use this when users need to read or search emails, manage labels and triage the inbox, read or manage calendar events, search/read Drive documents, retrieve Gemini meeting transcripts, or look up contacts.
 ---
 
 # Google Workspace Skill
 
-Read-only access to Gmail, Google Calendar, and Google Drive.
+Access to Gmail (read + write), Google Calendar (read + manage), Google Drive (read), and Contacts (read).
 
 ## Setup
 
@@ -19,6 +19,21 @@ This opens your browser for Google login. Click through the consent screen (you'
 
 The OAuth client ID and secret are built into the skill — no GCP project setup required for end users.
 
+**Multiple accounts:** Use `--profile` to add additional Google accounts:
+
+```bash
+node ${CLAUDE_SKILL_DIR}/setup.js --profile=personal
+```
+
+This stores credentials under a `[personal]` section in the credentials file. To use a non-default profile:
+
+```bash
+GOOGLE_PROFILE=personal node ${CLAUDE_SKILL_DIR}/google_api.js <<'EOF'
+const about = await drive.about.get();
+console.log(about.user.emailAddress);
+EOF
+```
+
 **Custom OAuth client (optional):** To use your own GCP OAuth client instead of the built-in one, add `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` to `~/.google-workspace/credentials` before running setup.
 
 ## Before You Start
@@ -27,6 +42,7 @@ Read the type file relevant to your task:
 - **Reading email?** Read `types/gmail.d.ts`
 - **Checking calendar?** Read `types/calendar.d.ts`
 - **Searching/reading Drive files?** Read `types/drive.d.ts`
+- **Checking contacts / known senders?** Read `types/people.d.ts`
 
 ## Usage
 
@@ -129,14 +145,18 @@ for (const event of result.items) {
 
 | API | Methods |
 |-----|---------|
-| `gmail.messages` | `list(options?)`, `get(id, options?)`, `getBody(id)`, `search(query, options?)`, `getAttachment(messageId, attachmentId)` |
+| `gmail.messages` | `list(options?)`, `get(id, options?)`, `getBody(id)`, `search(query, options?)`, `getAttachment(messageId, attachmentId)`, `modify(id, options)`, `batchModify(options)`, `trash(id)`, `batchDelete(ids)` |
 | `gmail.labels` | `list()`, `get(id)` |
 | `gmail.threads` | `list(options?)`, `get(id, options?)` |
+| `gmail` | `ensureLabel(name)`, `banishSender(emailOrDomain)` |
 | `calendar.calendars` | `list()`, `get(calendarId?)` |
-| `calendar.events` | `list(options?)`, `get(eventId, options?)`, `search(query, options?)` |
+| `calendar.events` | `list(options?)`, `get(eventId, options?)`, `search(query, options?)`, `delete(eventId, options?)` |
 | `drive.files` | `list(options?)`, `get(fileId, options?)`, `getContent(fileId)`, `exportAsText(fileId, mimeType?)`, `search(name, options?)` |
 | `drive.permissions` | `list(fileId)` |
 | `drive.about` | `get()` |
+| `people.connections` | `list(options?)` |
+| `people.otherContacts` | `list(options?)`, `search(query, options?)` |
+| `people` | `isKnownSender(email)`, `addKnownSender(email)` |
 
 ## Gmail Search Query Tips
 
