@@ -336,13 +336,19 @@ const gmail = {
       });
       if (!result.messages) return { messages: [], resultSizeEstimate: 0 };
 
+      const format = options.format || 'metadata';
       const messages = [];
       for (const stub of result.messages) {
         const msg = await request('GET', `${GMAIL_BASE}/messages/${stub.id}`, null, {
-          format: options.format || 'metadata',
-          metadataHeaders: options.metadataHeaders?.join('&metadataHeaders=') || 'From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date'
+          format,
+          // Repeated query param — pass an array so request() emits
+          // ?metadataHeaders=From&metadataHeaders=To&... (a joined string gets
+          // URL-encoded into one bogus value, which strips all headers).
+          metadataHeaders: options.metadataHeaders || ['From', 'To', 'Subject', 'Date']
         });
-        messages.push(msg);
+        // Return parsed summaries so callers read msg.subject/msg.from directly
+        // instead of walking payload.headers. payload is retained for power users.
+        messages.push(summarizeMessage(msg));
       }
       return {
         messages,
@@ -411,12 +417,37 @@ const gmail = {
   }
 };
 
-// Helper to extract readable body from a Gmail message
-function extractBody(msg) {
+// Lowercased { headerName: value } map from a Gmail message's payload headers.
+function headerMap(msg) {
   const headers = {};
   for (const h of msg.payload?.headers || []) {
     headers[h.name.toLowerCase()] = h.value;
   }
+  return headers;
+}
+
+// Lightweight parsed summary for search results — common headers lifted to the
+// top level so callers never need to walk payload.headers. The raw `payload` is
+// retained (its headers are populated in metadata format; parts only in full
+// format), and body text is intentionally omitted — use getBody() for that.
+function summarizeMessage(msg) {
+  const headers = headerMap(msg);
+  return {
+    id: msg.id,
+    threadId: msg.threadId,
+    labelIds: msg.labelIds,
+    snippet: msg.snippet,
+    subject: headers['subject'] || '(no subject)',
+    from: headers['from'] || '',
+    to: headers['to'] || '',
+    date: headers['date'] || '',
+    payload: msg.payload
+  };
+}
+
+// Helper to extract readable body from a Gmail message
+function extractBody(msg) {
+  const headers = headerMap(msg);
 
   function decodeBase64Url(data) {
     return Buffer.from(data.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf-8');
