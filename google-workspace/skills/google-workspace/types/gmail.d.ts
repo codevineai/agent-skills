@@ -264,6 +264,31 @@ interface GmailBatchModifyOptions {
   removeLabelIds?: string[];
 }
 
+/**
+ * Options for composing an outgoing message (send or draft).
+ * Provide either `body` (plain text) or `html` (HTML). If both are given, `html` wins.
+ */
+interface GmailComposeOptions {
+  /** Recipient(s) — a single address or an array */
+  to?: string | string[];
+  cc?: string | string[];
+  bcc?: string | string[];
+  /** Override the From header (defaults to the authenticated account) */
+  from?: string;
+  replyTo?: string | string[];
+  subject?: string;
+  /** Plain-text body */
+  body?: string;
+  /** HTML body (takes precedence over `body`) */
+  html?: string;
+  /** Thread to attach the message to (for replies) */
+  threadId?: string;
+  /** Message-ID being replied to (sets the In-Reply-To header) */
+  inReplyTo?: string;
+  /** References header value (for threading) */
+  references?: string;
+}
+
 interface GmailAPI {
   messages: GmailMessagesAPI & {
     /** Modify labels on a message (add/remove labels) */
@@ -274,7 +299,31 @@ interface GmailAPI {
     trash(id: string): Promise<any>;
     /** Permanently delete messages (cannot be undone!) */
     batchDelete(ids: string[]): Promise<any>;
+    /**
+     * Send an email immediately. Requires the gmail.send scope.
+     *
+     * @example
+     * await gmail.messages.send({ to: 'a@b.com', subject: 'Hi', body: 'Hello there' });
+     * // reply within a thread:
+     * await gmail.messages.send({ to: 'a@b.com', subject: 'Re: Hi', body: '...', threadId, inReplyTo: '<msgid>' });
+     */
+    send(options: GmailComposeOptions): Promise<{ id: string; threadId: string; labelIds?: string[] }>;
   };
+
+  /** Draft management. Creating/sending drafts requires the gmail.compose scope. */
+  drafts: {
+    /** List drafts (id + message stub) */
+    list(options?: { maxResults?: number; pageToken?: string }): Promise<any>;
+    /** Get a single draft */
+    get(id: string, options?: { format?: 'full' | 'metadata' | 'minimal' }): Promise<any>;
+    /** Create a draft from compose options */
+    create(options: GmailComposeOptions): Promise<{ id: string; message: { id: string; threadId: string } }>;
+    /** Send an existing draft by ID */
+    send(id: string): Promise<{ id: string; threadId: string; labelIds?: string[] }>;
+    /** Delete a draft */
+    delete(id: string): Promise<any>;
+  };
+
   labels: GmailLabelsAPI;
   threads: GmailThreadsAPI;
 

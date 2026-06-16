@@ -233,7 +233,19 @@ async function request(method, url, body = null, queryParams = null, options = {
     try {
       errorDetail = JSON.stringify(JSON.parse(text), null, 2);
     } catch (e) { /* Use raw text */ }
-    throw new Error(`${method} ${url} failed (${response.status}):\n${errorDetail}`);
+
+    let hint = '';
+    if (response.status === 401 || response.status === 403) {
+      const lower = errorDetail.toLowerCase();
+      if (lower.includes('insufficient') || lower.includes('scope') || lower.includes('permission')) {
+        hint = `\n\nThis looks like a missing OAuth scope. Your refresh token may have been`
+          + ` granted before this capability was added.\n`
+          + `Fix: re-run the setup script to re-consent with the current scopes:\n`
+          + `  node ${CLAUDE_SKILL_DIR}/setup.js\n`;
+      }
+    }
+
+    throw new Error(`${method} ${url} failed (${response.status}):\n${errorDetail}${hint}`);
   }
 
   if (response.status === 204) return null;
@@ -251,6 +263,52 @@ async function request(method, url, body = null, queryParams = null, options = {
 // ============================================================================
 
 const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
+
+// RFC 2822 header encoding for non-ASCII subjects (RFC 2047 encoded-word).
+function encodeHeader(value) {
+  // eslint-disable-next-line no-control-regex
+  if (/^[\x00-\x7F]*$/.test(value)) return value;
+  return `=?UTF-8?B?${Buffer.from(value, 'utf-8').toString('base64')}?=`;
+}
+
+function toAddressList(value) {
+  if (!value) return '';
+  return Array.isArray(value) ? value.join(', ') : value;
+}
+
+// Build a base64url-encoded RFC 2822 message for Gmail send/drafts.
+// options: { to, cc, bcc, from, subject, body, html, replyTo, inReplyTo, references }
+function buildRawMessage(options = {}) {
+  const headers = [];
+  const to = toAddressList(options.to);
+  const cc = toAddressList(options.cc);
+  const bcc = toAddressList(options.bcc);
+
+  if (options.from) headers.push(`From: ${options.from}`);
+  if (to) headers.push(`To: ${to}`);
+  if (cc) headers.push(`Cc: ${cc}`);
+  if (bcc) headers.push(`Bcc: ${bcc}`);
+  if (options.replyTo) headers.push(`Reply-To: ${toAddressList(options.replyTo)}`);
+  if (options.inReplyTo) headers.push(`In-Reply-To: ${options.inReplyTo}`);
+  if (options.references) headers.push(`References: ${options.references}`);
+  headers.push(`Subject: ${encodeHeader(options.subject || '')}`);
+  headers.push('MIME-Version: 1.0');
+
+  const isHtml = !!options.html;
+  const content = isHtml ? options.html : (options.body || '');
+  headers.push(`Content-Type: text/${isHtml ? 'html' : 'plain'}; charset="UTF-8"`);
+  headers.push('Content-Transfer-Encoding: base64');
+
+  const encodedBody = Buffer.from(content, 'utf-8').toString('base64');
+  const mime = headers.join('\r\n') + '\r\n\r\n' + encodedBody;
+
+  // base64url (Gmail requires URL-safe, no padding)
+  return Buffer.from(mime, 'utf-8')
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
 
 const gmail = {
   messages: {
@@ -304,7 +362,36 @@ const gmail = {
 
     trash: (id) => request('POST', `${GMAIL_BASE}/messages/${id}/trash`),
 
-    batchDelete: (ids) => request('POST', `${GMAIL_BASE}/messages/batchDelete`, { ids })
+    batchDelete: (ids) => request('POST', `${GMAIL_BASE}/messages/batchDelete`, { ids }),
+
+    send: (options = {}) => {
+      const raw = buildRawMessage(options);
+      const body = { raw };
+      if (options.threadId) body.threadId = options.threadId;
+      return request('POST', `${GMAIL_BASE}/messages/send`, body);
+    }
+  },
+
+  drafts: {
+    list: (options = {}) => request('GET', `${GMAIL_BASE}/drafts`, null, {
+      maxResults: options.maxResults || 20,
+      pageToken: options.pageToken || undefined
+    }),
+
+    get: (id, options = {}) => request('GET', `${GMAIL_BASE}/drafts/${id}`, null, {
+      format: options.format || 'full'
+    }),
+
+    create: (options = {}) => {
+      const raw = buildRawMessage(options);
+      const message = { raw };
+      if (options.threadId) message.threadId = options.threadId;
+      return request('POST', `${GMAIL_BASE}/drafts`, { message });
+    },
+
+    send: (id) => request('POST', `${GMAIL_BASE}/drafts/send`, { id }),
+
+    delete: (id) => request('DELETE', `${GMAIL_BASE}/drafts/${id}`)
   },
 
   labels: {

@@ -35,7 +35,7 @@
     {
       "name": "google-workspace",
       "source": "./google-workspace",
-      "description": "Access Gmail, Google Calendar, Google Drive, and Contacts. Read and search emails, manage labels and triage inbox, read and manage calendar events, read Drive documents, retrieve Gemini meeting transcripts, and look up contacts. Supports multiple Google accounts via profiles.",
+      "description": "Access Gmail, Google Calendar, Google Drive, and Contacts. Read, search, send, and draft emails, manage labels and triage inbox, read and manage calendar events, read Drive documents, retrieve Gemini meeting transcripts, and look up contacts. Supports multiple Google accounts via profiles.",
       "keywords": ["google", "gmail", "calendar", "drive", "contacts", "workspace"]
     },
     {

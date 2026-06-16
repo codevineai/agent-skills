@@ -5,6 +5,20 @@ All notable changes to the `google-workspace` skill are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.0]
+
+### Added
+- **Send email:** `gmail.messages.send(options)` builds an RFC 2822 message and sends it immediately. Supports `to`/`cc`/`bcc` (string or array), `from`, `replyTo`, `subject`, plain-text `body` or `html`, and threading via `threadId`/`inReplyTo`/`references`.
+- **Drafts:** new `gmail.drafts` namespace — `list`, `get`, `create(options)`, `send(id)`, and `delete(id)`. `create` uses the same compose options as `messages.send`.
+- Non-ASCII subjects are RFC 2047 encoded; bodies are base64url-encoded per Gmail's API.
+
+### Changed
+- **OAuth scopes broadened** to add `gmail.send` and `gmail.compose`.
+- The HTTP client now detects 401/403 responses mentioning insufficient scopes/permission and appends a hint to re-run `setup.js` to re-consent.
+
+### Migration notes
+- **Re-authentication required to send or draft.** Tokens minted before 1.2.0 lack the `gmail.send`/`gmail.compose` scopes; send/draft calls will fail with a 403 and the error now suggests re-running `setup.js`. All other operations continue to work unchanged.
+
 ## [1.1.0]
 
 ### Added

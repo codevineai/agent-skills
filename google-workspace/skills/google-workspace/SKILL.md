@@ -145,10 +145,21 @@ for (const event of result.items) {
 
 | API | Methods |
 |-----|---------|
-| `gmail.messages` | `list(options?)`, `get(id, options?)`, `getBody(id)`, `search(query, options?)`, `getAttachment(messageId, attachmentId)`, `modify(id, options)`, `batchModify(options)`, `trash(id)`, `batchDelete(ids)` |
+| `gmail.messages` | `list(options?)`, `get(id, options?)`, `getBody(id)`, `search(query, options?)`, `getAttachment(messageId, attachmentId)`, `modify(id, options)`, `batchModify(options)`, `trash(id)`, `batchDelete(ids)`, `send(options)` |
+| `gmail.drafts` | `list(options?)`, `get(id, options?)`, `create(options)`, `send(id)`, `delete(id)` |
 | `gmail.labels` | `list()`, `get(id)` |
 | `gmail.threads` | `list(options?)`, `get(id, options?)` |
 | `gmail` | `ensureLabel(name)`, `banishSender(emailOrDomain)` |
+
+Sending and drafting use compose options: `{ to, cc, bcc, from, replyTo, subject, body, html, threadId, inReplyTo, references }`. Provide `body` for plain text or `html` for HTML. `to`/`cc`/`bcc` accept a string or array.
+
+```bash
+node ${CLAUDE_SKILL_DIR}/google_api.js <<'EOF'
+await gmail.messages.send({ to: 'someone@example.com', subject: 'Hello', body: 'Sent from the skill.' });
+EOF
+```
+
+If a send/draft call fails with a 403 about insufficient scopes, the refresh token predates the send capability — re-run `node ${CLAUDE_SKILL_DIR}/setup.js` to re-consent.
 | `calendar.calendars` | `list()`, `get(calendarId?)` |
 | `calendar.events` | `list(options?)`, `get(eventId, options?)`, `search(query, options?)`, `delete(eventId, options?)` |
 | `drive.files` | `list(options?)`, `get(fileId, options?)`, `getContent(fileId)`, `exportAsText(fileId, mimeType?)`, `search(name, options?)` |
