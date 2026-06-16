@@ -68,8 +68,7 @@ const result = await gmail.messages.search(
 );
 
 for (const msg of result.messages) {
-  const subject = msg.payload.headers.find(h => h.name === 'Subject')?.value;
-  console.log(subject);
+  console.log(msg.subject);
 }
 
 // Step 2: Get the full email to find the Drive link
@@ -98,9 +97,7 @@ for (const f of result.files) {
 ```javascript
 const result = await gmail.messages.search('is:unread', { maxResults: 5 });
 for (const msg of result.messages) {
-  const subject = msg.payload.headers.find(h => h.name === 'Subject')?.value;
-  const from = msg.payload.headers.find(h => h.name === 'From')?.value;
-  console.log(`${from}: ${subject}`);
+  console.log(`${msg.from}: ${msg.subject}`);
 }
 ```
 

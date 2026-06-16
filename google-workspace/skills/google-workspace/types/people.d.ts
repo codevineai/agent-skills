@@ -144,8 +144,7 @@ interface PeopleAPI {
    * // Filter inbox for unknown senders
    * const result = await gmail.messages.search('in:inbox', { maxResults: 50 });
    * for (const msg of result.messages) {
-   *   const from = msg.payload.headers.find(h => h.name === 'From')?.value || '';
-   *   const email = (from.match(/[\w.+-]+@[\w.-]+\.\w+/i) || [''])[0];
+   *   const email = (msg.from.match(/[\w.+-]+@[\w.-]+\.\w+/i) || [''])[0];
    *   if (email && !(await people.isKnownSender(email))) {
    *     console.log(`Unknown sender: ${from}`);
    *   }

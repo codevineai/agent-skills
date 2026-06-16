@@ -109,9 +109,13 @@ interface GmailSearchOptions {
   maxResults?: number;
   /** Page token for pagination */
   pageToken?: string;
-  /** Response format: 'metadata' (default, faster) or 'full' */
+  /**
+   * Response format: 'metadata' (default — headers + snippet, no body) or
+   * 'full' (also fetches body parts into payload). Either way the result rows
+   * are GmailMessageSummary; use getBody(id) when you need decoded body text.
+   */
   format?: 'metadata' | 'full';
-  /** Headers to include in metadata format */
+  /** Headers to parse (default: From, To, Subject, Date) */
   metadataHeaders?: string[];
 }
 
@@ -125,8 +129,31 @@ interface GmailMessageListResult {
   resultSizeEstimate: number;
 }
 
+/**
+ * A search result row: common headers parsed to the top level so you can read
+ * `msg.subject` / `msg.from` directly without walking `payload.headers`.
+ * Body text is NOT included — call gmail.messages.getBody(id) for that.
+ */
+interface GmailMessageSummary {
+  id: string;
+  threadId: string;
+  labelIds: string[];
+  /** Google's ~200-char preview snippet */
+  snippet: string;
+  subject: string;
+  from: string;
+  to: string;
+  date: string;
+  /**
+   * Raw payload. In the default 'metadata' format this carries `headers` but no
+   * body parts; in 'full' format it also carries `parts`. Prefer the parsed
+   * top-level fields above.
+   */
+  payload: GmailMessagePart;
+}
+
 interface GmailSearchResult {
-  messages: GmailMessage[];
+  messages: GmailMessageSummary[];
   nextPageToken?: string;
   resultSizeEstimate: number;
 }
@@ -180,15 +207,16 @@ interface GmailMessagesAPI {
   getBody(id: string): Promise<GmailParsedMessage>;
 
   /**
-   * Search emails and return message details (combines list + get)
-   * Uses Gmail search query syntax.
+   * Search emails and return parsed summaries (combines list + per-message get).
+   * Uses Gmail search query syntax. Each row has `subject`/`from`/`to`/`date`/
+   * `snippet` parsed to the top level — no need to walk `payload.headers`.
+   * The body is not included; call getBody(id) when you need the text.
    *
    * @example
    * // Find Gemini meeting transcript emails
    * const result = await gmail.messages.search('from:calendar-notification@google.com subject:transcript');
    * for (const msg of result.messages) {
-   *   const subject = msg.payload.headers.find(h => h.name === 'Subject')?.value;
-   *   console.log(subject);
+   *   console.log(`${msg.from}: ${msg.subject}`);
    * }
    *
    * @example

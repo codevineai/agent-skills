@@ -5,6 +5,17 @@ All notable changes to the `google-workspace` skill are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.3.0]
+
+### Fixed
+- **`messages.search` returned headerless results.** The per-message fetch built the repeated `metadataHeaders` query param as a single joined string, which got URL-encoded into one invalid value — so Gmail returned messages whose `payload.headers` was empty and `msg.payload.headers.find(...)` threw `Cannot read properties of undefined`. The param is now passed as an array and emitted correctly.
+
+### Changed
+- **`messages.search` now returns parsed summaries.** Each result has `subject`, `from`, `to`, `date`, and `snippet` lifted to the top level (`msg.subject` instead of `msg.payload.headers.find(...)`). The raw `payload` is still present for power users, and body text is unchanged — use `getBody(id)` for that. New `GmailMessageSummary` type documents the shape; `search` docstrings and examples updated.
+
+### Migration notes
+- Backward-compatible: `payload` remains on each search row (its `headers` are now correctly populated), so existing `payload.headers` code keeps working — but the top-level `msg.subject`/`msg.from` fields are the recommended path.
+
 ## [1.2.0]
 
 ### Added
