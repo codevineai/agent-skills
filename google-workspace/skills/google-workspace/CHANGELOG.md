@@ -5,6 +5,16 @@ All notable changes to the `google-workspace` skill are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.4.0]
+
+### Added
+- **Calendar event write operations:** `calendar.events.create(event, options?)`, `update(eventId, event, options?)` (full replace), `patch(eventId, fields, options?)` (partial), `move(eventId, destCalendarId, options?)`, and `quickAdd(text, options?)`. `create`/`update`/`patch` accept a Calendar Event resource (`summary`, `location`, `description`, `start`/`end` as `{ dateTime, timeZone }` or `{ date }`, `attendees`, `recurrence`, `reminders`, `attachments`, …). Write options: `calendarId`, `sendUpdates` (`all`/`externalOnly`/`none`), and `conferenceData` (set true to create a Meet link from a `conferenceData.createRequest` body).
+- **`delete` now forwards `sendUpdates`** so cancellations can notify attendees.
+- `types/calendar.d.ts` gains `CalendarEventInput`, `EventDateTime`, and `CalendarWriteOptions`, and documents create/update/patch/delete/move/quickAdd. `SKILL.md` adds a "Create Calendar Events" section and expands the `calendar.events` method table.
+
+### Migration notes
+- Backward-compatible and no re-auth needed: the `calendar` (read+write) scope was already granted in 1.1.0, so tokens minted at 1.1.0 or later can create/update/delete immediately. Read-only calls are unchanged.
+
 ## [1.3.0]
 
 ### Fixed

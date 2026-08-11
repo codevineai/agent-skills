@@ -138,6 +138,36 @@ for (const event of result.items) {
 }
 ```
 
+### Create Calendar Events
+
+Requires the write scope (`auth/calendar`). If a create call fails with a 403 about
+insufficient scopes, re-run `setup.js` to re-consent.
+
+```javascript
+// start/end use { dateTime, timeZone } for timed events, or { date } for all-day.
+// Pass the IANA timeZone so DST offsets are computed correctly.
+const ev = await calendar.events.create({
+  summary: 'ReadSource Committee',
+  location: 'Schenck School',
+  description: 'Board of Trustees 2026-27 — ReadSource Committee.',
+  start: { dateTime: '2026-08-19T08:30:00', timeZone: 'America/New_York' },
+  end:   { dateTime: '2026-08-19T09:30:00', timeZone: 'America/New_York' },
+});
+console.log(`Created: ${ev.htmlLink}`);
+
+// Invite attendees and send email invitations:
+await calendar.events.create({
+  summary: 'Sync',
+  start: { dateTime: '2026-09-01T15:00:00', timeZone: 'America/New_York' },
+  end:   { dateTime: '2026-09-01T15:30:00', timeZone: 'America/New_York' },
+  attendees: [{ email: 'someone@example.com' }],
+}, { sendUpdates: 'all' });
+
+// Patch a single field, or delete:
+await calendar.events.patch(ev.id, { location: 'Virtual' });
+await calendar.events.delete(ev.id);
+```
+
 ## API Summary
 
 | API | Methods |
@@ -158,7 +188,7 @@ EOF
 
 If a send/draft call fails with a 403 about insufficient scopes, the refresh token predates the send capability — re-run `node ${CLAUDE_SKILL_DIR}/setup.js` to re-consent.
 | `calendar.calendars` | `list()`, `get(calendarId?)` |
-| `calendar.events` | `list(options?)`, `get(eventId, options?)`, `search(query, options?)`, `delete(eventId, options?)` |
+| `calendar.events` | `list(options?)`, `get(eventId, options?)`, `search(query, options?)`, `create(event, options?)`, `update(eventId, event, options?)`, `patch(eventId, fields, options?)`, `delete(eventId, options?)`, `move(eventId, destCalendarId, options?)`, `quickAdd(text, options?)` |
 | `drive.files` | `list(options?)`, `get(fileId, options?)`, `getContent(fileId)`, `exportAsText(fileId, mimeType?)`, `search(name, options?)` |
 | `drive.permissions` | `list(fileId)` |
 | `drive.about` | `get()` |
