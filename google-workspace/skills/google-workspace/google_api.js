@@ -547,9 +547,64 @@ const calendar = {
       });
     },
 
+    // Create an event. `event` is a Google Calendar Event resource:
+    //   { summary, description, location, start, end, attendees, reminders, ... }
+    // start/end are { dateTime, timeZone } or { date } for all-day.
+    // options: { calendarId, sendUpdates: 'all'|'externalOnly'|'none', conferenceData }
+    create: (event, options = {}) => {
+      const calendarId = options.calendarId || 'primary';
+      const query = {
+        sendUpdates: options.sendUpdates || undefined,
+        conferenceDataVersion: options.conferenceData ? 1 : undefined,
+        supportsAttachments: event.attachments ? 'true' : undefined
+      };
+      return request('POST', `${CALENDAR_BASE}/calendars/${encodeURIComponent(calendarId)}/events`, event, query);
+    },
+
+    // Full-replace update (PUT). Provide the complete event resource.
+    update: (eventId, event, options = {}) => {
+      const calendarId = options.calendarId || 'primary';
+      const query = {
+        sendUpdates: options.sendUpdates || undefined,
+        conferenceDataVersion: options.conferenceData ? 1 : undefined,
+        supportsAttachments: event.attachments ? 'true' : undefined
+      };
+      return request('PUT', `${CALENDAR_BASE}/calendars/${encodeURIComponent(calendarId)}/events/${eventId}`, event, query);
+    },
+
+    // Partial update (PATCH). Provide only the fields to change.
+    patch: (eventId, fields, options = {}) => {
+      const calendarId = options.calendarId || 'primary';
+      const query = {
+        sendUpdates: options.sendUpdates || undefined,
+        conferenceDataVersion: options.conferenceData ? 1 : undefined,
+        supportsAttachments: fields.attachments ? 'true' : undefined
+      };
+      return request('PATCH', `${CALENDAR_BASE}/calendars/${encodeURIComponent(calendarId)}/events/${eventId}`, fields, query);
+    },
+
     delete: (eventId, options = {}) => {
       const calendarId = options.calendarId || 'primary';
-      return request('DELETE', `${CALENDAR_BASE}/calendars/${encodeURIComponent(calendarId)}/events/${eventId}`);
+      const query = { sendUpdates: options.sendUpdates || undefined };
+      return request('DELETE', `${CALENDAR_BASE}/calendars/${encodeURIComponent(calendarId)}/events/${eventId}`, null, query);
+    },
+
+    // Move an event to another calendar. Returns the moved event.
+    move: (eventId, destinationCalendarId, options = {}) => {
+      const calendarId = options.calendarId || 'primary';
+      const query = {
+        destination: destinationCalendarId,
+        sendUpdates: options.sendUpdates || undefined
+      };
+      return request('POST', `${CALENDAR_BASE}/calendars/${encodeURIComponent(calendarId)}/events/${eventId}/move`, null, query);
+    },
+
+    // Create an event from a natural-language string, e.g.
+    //   "Lunch with Sara at Schenck School 3pm Aug 19".
+    quickAdd: (text, options = {}) => {
+      const calendarId = options.calendarId || 'primary';
+      const query = { text, sendUpdates: options.sendUpdates || undefined };
+      return request('POST', `${CALENDAR_BASE}/calendars/${encodeURIComponent(calendarId)}/events/quickAdd`, null, query);
     }
   }
 };
