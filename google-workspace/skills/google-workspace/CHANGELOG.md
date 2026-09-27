@@ -5,6 +5,27 @@ All notable changes to the `google-workspace` skill are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.5.0]
+
+### Added
+- **Sheets API:** `sheets.spreadsheets` (`get`, `create`, `batchUpdate`), `sheets.values` (`get`, `batchGet`, `update`, `append`, `clear`, `batchUpdate`), plus `sheets.addSheet` and `sheets.deleteSheet`. Writes default to `valueInputOption: 'USER_ENTERED'`.
+- **Docs API:** `docs.documents` (`get`, `create`, `batchUpdate`), plus `docs.getText` (all tabs, tables tab-separated), `docs.appendText`, `docs.insertText`, and `docs.replaceText`.
+- **Slides API:** `slides.presentations` (`get`, `create`, `batchUpdate`), `slides.pages` (`get`, `getThumbnail`), plus `slides.getText` (per-slide text and speaker notes), `slides.addSlide`, and `slides.replaceText`.
+- **Tasks API:** `tasks.tasklists` (`list`, `get`, `create`, `patch`, `delete`) and `tasks.tasks` (`list`, `get`, `create`, `patch`, `update`, `delete`, `complete`, `reopen`, `move`, `clearCompleted`). `tasklistId` defaults to `@default`.
+- New type files `types/sheets.d.ts`, `types/docs.d.ts`, `types/slides.d.ts`, `types/tasks.d.ts`. `sheets`, `docs`, `slides`, and `tasks` are in scope in `google_api.js` scripts alongside the existing objects.
+- **gws CLI support.** `SKILL.md` now tells the agent to check for an installed, configured [gws CLI](https://github.com/googleworkspace/cli) (`gws auth status` → `token_valid: true`) and prefer it for API calls, falling back to `google_api.js` when gws is absent or unconfigured. `google_api.js` stays the path for its helpers (search summaries, `getBody`, send/drafts, `ensureLabel`, `banishSender`, known senders) and for non-default profiles. New "Using gws" section with command examples and a gotchas table.
+- **`setup.js --gws`** shares the saved OAuth client and refresh token with gws: writes `client_secret.json` and `credentials.json` to the gws config dir (`~/.config/gws` or `$GOOGLE_WORKSPACE_CLI_CONFIG_DIR`) and clears gws's token cache. No browser flow. Honors `--profile`. Refuses to run when gws already has its own login (`credentials.enc`).
+
+### Changed
+- A 403 for an API that is not enabled in the GCP project now gets its own hint (enable the API) instead of the re-consent hint.
+- **OAuth scopes broadened.** `drive.readonly` → `drive` (read + write); added `documents`, `spreadsheets`, `presentations`, `tasks`, `openid`, `email`, `profile`.
+
+### Migration notes
+- Existing tokens keep working for everything they could do before. Re-run `setup.js` to re-consent and pick up the new scopes, then `setup.js --gws` again if gws shares the token.
+- The Sheets, Docs, Slides, and Tasks APIs must be enabled in the OAuth client's GCP project.
+- The new Sheets, Docs, Slides, and Tasks functions need a token minted at 1.5.0 or later; older tokens get a 403 with the re-consent hint. Existing Gmail, Calendar, Drive, and Contacts functions are unchanged.
+- `google_api.js` has no Drive write wrappers (upload, move, delete, share). Those go through gws.
+
 ## [1.4.0]
 
 ### Added

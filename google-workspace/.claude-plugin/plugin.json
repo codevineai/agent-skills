@@ -1,9 +1,9 @@
 {
   "name": "google-workspace",
-  "version": "1.4.0",
-  "description": "Access Gmail, Google Calendar, Google Drive, and Contacts. Read, search, send, and draft emails, manage labels and triage inbox, read and manage calendar events, read Drive documents, retrieve Gemini meeting transcripts, and look up contacts. Supports multiple Google accounts via profiles.",
+  "version": "1.5.0",
+  "description": "Access Gmail, Google Calendar, Google Drive, Docs, Sheets, Slides, Tasks, and Contacts. Read, search, send, and draft emails, manage labels and triage inbox, read and manage calendar events, read and write Drive files, retrieve Gemini meeting transcripts, and look up contacts. Prefers the gws CLI when it is installed and configured; falls back to the built-in JS API. Supports multiple Google accounts via profiles.",
   "author": {
     "name": "CodeVine AI"
   },
-  "keywords": ["google", "gmail", "calendar", "drive", "contacts", "workspace"]
+  "keywords": ["google", "gmail", "calendar", "drive", "sheets", "docs", "slides", "tasks", "contacts", "workspace", "gws"]
 }
