@@ -5,6 +5,9 @@
  * Run this once to get a refresh token:
  *   node ${CLAUDE_SKILL_DIR}/setup.js
  *
+ * Optional: share the saved token with the gws CLI (no browser, no re-consent):
+ *   node ${CLAUDE_SKILL_DIR}/setup.js --gws
+ *
  * Prerequisites:
  *   1. Create OAuth 2.0 Client ID at https://console.cloud.google.com/apis/credentials
  *      - Application type: "Desktop app"
@@ -12,12 +15,14 @@
  *      - Gmail API
  *      - Google Calendar API
  *      - Google Drive API
+ *      - People API
+ *      - Google Sheets API, Google Docs API, Google Slides API, Google Tasks API
  */
 
 import { createServer } from 'http';
 import { homedir } from 'os';
 import { join } from 'path';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'fs';
 import { URL } from 'url';
 import { exec } from 'child_process';
 
@@ -26,10 +31,21 @@ const SCOPES = [
   'https://www.googleapis.com/auth/gmail.send',
   'https://www.googleapis.com/auth/gmail.compose',
   'https://www.googleapis.com/auth/calendar',
-  'https://www.googleapis.com/auth/drive.readonly',
+  'https://www.googleapis.com/auth/drive',
+  'https://www.googleapis.com/auth/documents',
+  'https://www.googleapis.com/auth/spreadsheets',
+  'https://www.googleapis.com/auth/presentations',
+  'https://www.googleapis.com/auth/tasks',
   'https://www.googleapis.com/auth/contacts.readonly',
-  'https://www.googleapis.com/auth/contacts.other.readonly'
+  'https://www.googleapis.com/auth/contacts.other.readonly',
+  'openid',
+  'email',
+  'profile'
 ].join(' ');
+
+// Shared OAuth client — Desktop app type, client secret is not confidential per Google's docs.
+const DEFAULT_CLIENT_ID = '797454094219-uq1uhvee4p35es9r9k8rt2ph7ac5tbsj.apps.googleusercontent.com';
+const DEFAULT_CLIENT_SECRET = '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';
 
 const REDIRECT_PORT = 8089;
 const REDIRECT_URI = `http://localhost:${REDIRECT_PORT}/callback`;
@@ -81,6 +97,49 @@ function serializeSection(name, data) {
   return out;
 }
 
+/**
+ * Point the gws CLI (https://github.com/googleworkspace/cli) at the OAuth client and
+ * refresh token already saved for this profile. Writes client_secret.json and
+ * credentials.json into the gws config dir and clears its token cache.
+ */
+function syncToGws({ clientId, clientSecret, refreshToken }) {
+  const gwsDir = process.env.GOOGLE_WORKSPACE_CLI_CONFIG_DIR || join(homedir(), '.config', 'gws');
+
+  // gws prefers its own encrypted login over credentials.json — don't silently lose to it.
+  if (existsSync(join(gwsDir, 'credentials.enc'))) {
+    throw new Error(`gws already has its own login (${join(gwsDir, 'credentials.enc')}). Run "gws auth logout" first, then re-run with --gws.`);
+  }
+
+  mkdirSync(gwsDir, { recursive: true, mode: 0o700 });
+
+  // The numeric prefix of the client ID is the GCP project number; gws uses it as the quota project.
+  const clientConfig = {
+    installed: {
+      client_id: clientId,
+      project_id: clientId.split('-')[0],
+      client_secret: clientSecret,
+      auth_uri: 'https://accounts.google.com/o/oauth2/auth',
+      token_uri: 'https://oauth2.googleapis.com/token',
+      auth_provider_x509_cert_url: 'https://www.googleapis.com/oauth2/v1/certs',
+      redirect_uris: ['http://localhost']
+    }
+  };
+  const credentials = {
+    type: 'authorized_user',
+    client_id: clientId,
+    client_secret: clientSecret,
+    refresh_token: refreshToken
+  };
+
+  writeFileSync(join(gwsDir, 'client_secret.json'), JSON.stringify(clientConfig, null, 2), { mode: 0o600 });
+  writeFileSync(join(gwsDir, 'credentials.json'), JSON.stringify(credentials, null, 2), { mode: 0o600 });
+  // A cached access token keeps the scopes it was minted with; drop it so gws mints a fresh one.
+  rmSync(join(gwsDir, 'token_cache.json'), { force: true });
+
+  console.log(`gws configured in ${gwsDir}`);
+  console.log('Verify with: gws auth status');
+}
+
 async function setup() {
   const credsDir = join(homedir(), '.google-workspace');
   const credsFile = join(credsDir, 'credentials');
@@ -89,10 +148,6 @@ async function setup() {
   const profileArg = process.argv.find(a => a.startsWith('--profile='));
   const profileIdx = process.argv.indexOf('--profile');
   const profileName = profileArg ? profileArg.split('=')[1] : (profileIdx >= 0 ? process.argv[profileIdx + 1] : 'default');
-
-  // Shared OAuth client — Desktop app type, client secret is not confidential per Google's docs.
-  const DEFAULT_CLIENT_ID = '797454094219-uq1uhvee4p35es9r9k8rt2ph7ac5tbsj.apps.googleusercontent.com';
-  const DEFAULT_CLIENT_SECRET = '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';
 
   // Load existing profiles so we don't overwrite them
   let profiles = {};
@@ -112,6 +167,15 @@ async function setup() {
   // Fall back to built-in defaults
   if (!clientId) clientId = DEFAULT_CLIENT_ID;
   if (!clientSecret) clientSecret = DEFAULT_CLIENT_SECRET;
+
+  // --gws: reuse the token already saved for this profile, no OAuth flow
+  if (process.argv.includes('--gws')) {
+    if (!existingProfile.GOOGLE_REFRESH_TOKEN) {
+      throw new Error(`No refresh token saved for profile [${profileName}]. Run setup without --gws first.`);
+    }
+    syncToGws({ clientId, clientSecret, refreshToken: existingProfile.GOOGLE_REFRESH_TOKEN });
+    return;
+  }
 
   console.log(`Setting up profile: ${profileName}`);
   console.log('Starting OAuth flow...');

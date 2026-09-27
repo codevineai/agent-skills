@@ -5,6 +5,20 @@ All notable changes to the `google-workspace` skill are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.5.0]
+
+### Added
+- **gws CLI support.** `SKILL.md` now tells the agent to check for an installed, configured [gws CLI](https://github.com/googleworkspace/cli) (`gws auth status` → `token_valid: true`) and prefer it for API calls, falling back to `google_api.js` when gws is absent or unconfigured. `google_api.js` stays the path for its helpers (search summaries, `getBody`, send/drafts, `ensureLabel`, `banishSender`, known senders) and for non-default profiles. New "Using gws" section with command examples and a gotchas table.
+- **`setup.js --gws`** shares the saved OAuth client and refresh token with gws: writes `client_secret.json` and `credentials.json` to the gws config dir (`~/.config/gws` or `$GOOGLE_WORKSPACE_CLI_CONFIG_DIR`) and clears gws's token cache. No browser flow. Honors `--profile`. Refuses to run when gws already has its own login (`credentials.enc`).
+
+### Changed
+- **OAuth scopes broadened.** `drive.readonly` → `drive` (read + write); added `documents`, `spreadsheets`, `presentations`, `tasks`, `openid`, `email`, `profile`.
+
+### Migration notes
+- Existing tokens keep working for everything they could do before. Re-run `setup.js` to re-consent and pick up the new scopes, then `setup.js --gws` again if gws shares the token.
+- The Sheets, Docs, Slides, and Tasks APIs must be enabled in the OAuth client's GCP project.
+- `google_api.js` is unchanged: it has no Drive write, Docs, Sheets, Slides, or Tasks wrappers. Those go through gws.
+
 ## [1.4.0]
 
 ### Added

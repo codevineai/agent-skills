@@ -1,11 +1,33 @@
 ---
 name: google-workspace
-description: Access Google Gmail, Calendar, Drive, and Contacts APIs. Use this when users need to read or search emails, manage labels and triage the inbox, read or manage calendar events, search/read Drive documents, retrieve Gemini meeting transcripts, or look up contacts.
+description: Access Google Gmail, Calendar, Drive, Docs, Sheets, Slides, Tasks, and Contacts APIs. Use this when users need to read or search emails, manage labels and triage the inbox, read or manage calendar events, search/read/write Drive files, read or edit Docs, Sheets, and Slides, manage Tasks, retrieve Gemini meeting transcripts, or look up contacts. Prefers the gws CLI when it is installed and configured.
 ---
 
 # Google Workspace Skill
 
-Access to Gmail (read + write), Google Calendar (read + manage), Google Drive (read), and Contacts (read).
+Access to Gmail (read + write), Google Calendar (read + manage), Google Drive (read + write), Docs, Sheets, Slides, Tasks, and Contacts (read).
+
+Two ways to call the APIs:
+
+| Path | Covers |
+|------|--------|
+| **`gws` CLI** (preferred when installed and configured) | Every Workspace API method: Gmail, Calendar, Drive read/write, Docs, Sheets, Slides, Tasks, People |
+| **`google_api.js`** (always available) | Gmail, Calendar, Drive read, Contacts — plus the helpers gws does not have |
+
+## Choose the path first
+
+Run this check once per session, before the first Google call:
+
+```bash
+command -v gws >/dev/null && gws auth status 2>/dev/null | grep -E '"token_valid"|"scope_count"|"user"'
+```
+
+- **`"token_valid": true`** → gws is installed and configured. **Use gws** for every call it can make (see [Using gws](#using-gws)).
+- **No output, or `token_valid` is false** → use `google_api.js` (see [Usage](#usage)). Do not install or configure gws unless the user asks.
+
+Use `google_api.js` even when gws is available for the helpers that have no gws equivalent: `gmail.messages.search` (parsed summaries), `gmail.messages.getBody`, `gmail.messages.send` / `gmail.drafts.create` (RFC 2822 message building), `gmail.ensureLabel`, `gmail.banishSender`, `people.isKnownSender` / `people.addKnownSender`, and any non-default `GOOGLE_PROFILE`.
+
+If a gws call fails with `insufficient authentication scopes`, the gws token lacks that scope — fall back to `google_api.js` if it covers the call, otherwise tell the user to re-consent (see [Configuring gws](#configuring-gws)).
 
 ## Setup
 
@@ -34,6 +56,19 @@ console.log(about.user.emailAddress);
 EOF
 ```
 
+**Scopes requested:** `gmail.modify`, `gmail.send`, `gmail.compose`, `calendar`, `drive`, `documents`, `spreadsheets`, `presentations`, `tasks`, `contacts.readonly`, `contacts.other.readonly`, `openid`, `email`, `profile`. Tokens minted before 1.5.0 have `drive.readonly` and none of the Docs/Sheets/Slides/Tasks scopes — re-run `setup.js` to re-consent.
+
+### Configuring gws
+
+Optional. Requires the [gws CLI](https://github.com/googleworkspace/cli) on the PATH (`brew install googleworkspace-cli` or `npm install -g @googleworkspace/cli`). After `setup.js` has saved a token, share it with gws — no browser, no second consent:
+
+```bash
+node ${CLAUDE_SKILL_DIR}/setup.js --gws
+gws auth status
+```
+
+This writes `client_secret.json` and `credentials.json` to `~/.config/gws/` (or `$GOOGLE_WORKSPACE_CLI_CONFIG_DIR`) from the `[default]` profile (or `--profile`), and clears gws's token cache. It refuses to run if gws already has its own login (`credentials.enc`); run `gws auth logout` first, or keep that login and manage scopes with `gws auth login --scopes <comma-separated scopes>`.
+
 **Custom OAuth client (optional):** To use your own GCP OAuth client instead of the built-in one, add `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` to `~/.google-workspace/credentials` before running setup.
 
 ## Before You Start
@@ -54,7 +89,56 @@ console.log(`Logged in as: ${about.user.emailAddress}`);
 EOF
 ```
 
+## Using gws
+
+```bash
+gws <service> <resource> [sub-resource] <method> --params '<JSON>' [--json '<JSON body>']
+gws schema <service.resource.method>     # parameters, body, and required scopes for a method
+```
+
+`--params` carries URL/query parameters, `--json` the request body. Output is JSON; add `--format table|csv|yaml` to change it, `--page-all` to paginate (NDJSON, one page per line).
+
+```bash
+# Gmail
+gws gmail users messages list --params '{"userId":"me","q":"is:unread newer_than:7d","maxResults":10}'
+gws gmail users messages get --params '{"userId":"me","id":"MSG_ID","format":"full"}'
+
+# Calendar
+gws calendar events list --params '{"calendarId":"primary","timeMin":"2026-09-01T00:00:00Z","singleEvents":true,"orderBy":"startTime"}'
+gws calendar events insert --params '{"calendarId":"primary"}' --json '{"summary":"Sync","start":{"dateTime":"2026-09-01T15:00:00","timeZone":"America/New_York"},"end":{"dateTime":"2026-09-01T15:30:00","timeZone":"America/New_York"}}'
+
+# Drive
+gws drive files list --params '{"q":"name contains \"transcript\" and trashed = false","pageSize":10,"fields":"files(id,name,mimeType,modifiedTime,webViewLink)"}'
+gws drive files export --params '{"fileId":"FILE_ID","mimeType":"text/plain"}' --output transcript.txt
+gws drive files create --json '{"name":"report.pdf"}' --upload ./report.pdf
+
+# Sheets / Docs / Slides
+gws sheets spreadsheets values get --params '{"spreadsheetId":"SHEET_ID","range":"Sheet1!A1:D20"}'
+gws sheets spreadsheets values update --params '{"spreadsheetId":"SHEET_ID","range":"Sheet1!A1","valueInputOption":"USER_ENTERED"}' --json '{"values":[["a","b"]]}'
+gws docs documents get --params '{"documentId":"DOC_ID"}'
+gws slides presentations get --params '{"presentationId":"DECK_ID"}'
+
+# Tasks / Contacts
+gws tasks tasklists list
+gws people people connections list --params '{"resourceName":"people/me","personFields":"names,emailAddresses","pageSize":100}'
+gws people otherContacts list --params '{"readMask":"names,emailAddresses","pageSize":100}'
+```
+
+### gws gotchas
+
+| Symptom | Cause / fix |
+|---------|-------------|
+| `--output ... is outside the current directory` | `--output` only accepts paths under the current directory. `cd` to the target directory first. |
+| `insufficient authentication scopes` right after a re-consent | Stale `~/.config/gws/token_cache.json`; cached access tokens keep their old scopes. Delete the file and retry. |
+| `API has not been used in project <other-project>` | gws took the quota project from gcloud's application-default credentials. Set `GOOGLE_WORKSPACE_PROJECT_ID` to the OAuth client's project number (the digits before the first `-` in the client ID), or make sure `client_secret.json` has `project_id`. |
+| `API has not been used in project <client project>` | That API is not enabled in the OAuth client's GCP project. The error includes the enable link. |
+| `No OAuth client configured` on `gws auth login` | `~/.config/gws/client_secret.json` is missing — run `setup.js --gws`. |
+
+Send mail and create drafts through `google_api.js` — the raw Gmail API needs a base64url RFC 2822 message, which the skill builds for you.
+
 ## Quick Reference
+
+The examples below use `google_api.js`.
 
 ### Find Gemini Meeting Transcripts
 
@@ -189,7 +273,7 @@ EOF
 If a send/draft call fails with a 403 about insufficient scopes, the refresh token predates the send capability — re-run `node ${CLAUDE_SKILL_DIR}/setup.js` to re-consent.
 | `calendar.calendars` | `list()`, `get(calendarId?)` |
 | `calendar.events` | `list(options?)`, `get(eventId, options?)`, `search(query, options?)`, `create(event, options?)`, `update(eventId, event, options?)`, `patch(eventId, fields, options?)`, `delete(eventId, options?)`, `move(eventId, destCalendarId, options?)`, `quickAdd(text, options?)` |
-| `drive.files` | `list(options?)`, `get(fileId, options?)`, `getContent(fileId)`, `exportAsText(fileId, mimeType?)`, `search(name, options?)` |
+| `drive.files` (read-only wrappers; write via gws) | `list(options?)`, `get(fileId, options?)`, `getContent(fileId)`, `exportAsText(fileId, mimeType?)`, `search(name, options?)` |
 | `drive.permissions` | `list(fileId)` |
 | `drive.about` | `get()` |
 | `people.connections` | `list(options?)` |
