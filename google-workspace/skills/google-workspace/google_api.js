@@ -2,7 +2,8 @@
 /**
  * Google Workspace API Skill
  *
- * Access Gmail, Google Calendar, and Google Drive from Claude Code.
+ * Access Gmail, Google Calendar, Google Drive, Sheets, Docs, Slides, Tasks,
+ * and Contacts from Claude Code.
  * Uses OAuth 2.0 with refresh tokens for authentication.
  *
  * Credentials (in priority order):
@@ -107,7 +108,7 @@ function getCredentials(platform, keys) {
     error += `\nSetup instructions:\n`;
     error += `  1. Go to https://console.cloud.google.com/apis/credentials\n`;
     error += `  2. Create an OAuth 2.0 Client ID (Desktop app type)\n`;
-    error += `  3. Enable Gmail API, Calendar API, and Drive API\n`;
+    error += `  3. Enable the Gmail, Calendar, Drive, People, Sheets, Docs, Slides, and Tasks APIs\n`;
     error += `  4. Run the setup script: node ${CLAUDE_SKILL_DIR}/setup.js\n`;
     error += `\nTo use a profile: export GOOGLE_PROFILE=work\n`;
     throw new Error(error);
@@ -174,7 +175,9 @@ async function getAccessToken() {
         + `Fix: Enable these APIs at https://console.cloud.google.com/apis/library\n`
         + `  - Gmail API\n`
         + `  - Google Calendar API\n`
-        + `  - Google Drive API\n`;
+        + `  - Google Drive API\n`
+        + `  - People API\n`
+        + `  - Google Sheets API, Google Docs API, Google Slides API, Google Tasks API\n`;
     }
 
     throw new Error(`Token refresh failed (${response.status}): ${desc}${hint}`);
@@ -237,7 +240,10 @@ async function request(method, url, body = null, queryParams = null, options = {
     let hint = '';
     if (response.status === 401 || response.status === 403) {
       const lower = errorDetail.toLowerCase();
-      if (lower.includes('insufficient') || lower.includes('scope') || lower.includes('permission')) {
+      if (lower.includes('accessnotconfigured') || lower.includes('service_disabled') || lower.includes('it is disabled')) {
+        hint = `\n\nThis API is not enabled in the OAuth client's GCP project.\n`
+          + `Fix: open the enable link in the error above, enable the API, wait a minute, and retry.\n`;
+      } else if (lower.includes('insufficient') || lower.includes('scope') || lower.includes('permission')) {
         hint = `\n\nThis looks like a missing OAuth scope. Your refresh token may have been`
           + ` granted before this capability was added.\n`
           + `Fix: re-run the setup script to re-consent with the current scopes:\n`
@@ -987,10 +993,361 @@ gmail.banishSender = async (emailOrDomain) => {
 };
 
 // ============================================================================
+// GOOGLE SHEETS API
+// ============================================================================
+
+const SHEETS_BASE = 'https://sheets.googleapis.com/v4/spreadsheets';
+
+const valuesUrl = (spreadsheetId, range, suffix = '') =>
+  `${SHEETS_BASE}/${spreadsheetId}/values/${encodeURIComponent(range)}${suffix}`;
+
+const sheets = {
+  spreadsheets: {
+    // Metadata: title, sheets (tabs) with sheetId/title/gridProperties. Cell data
+    // only when options.includeGridData is true — use values.get for cell values.
+    get: (spreadsheetId, options = {}) => request('GET', `${SHEETS_BASE}/${spreadsheetId}`, null, {
+      ranges: options.ranges || undefined,
+      includeGridData: options.includeGridData ? 'true' : undefined,
+      fields: options.fields || undefined
+    }),
+
+    // options: { title, sheets: ['Tab name', ...] }
+    create: (options = {}) => {
+      const body = { properties: { title: options.title || 'Untitled spreadsheet' } };
+      if (options.sheets) body.sheets = options.sheets.map(title => ({ properties: { title } }));
+      return request('POST', SHEETS_BASE, body);
+    },
+
+    // Structural/formatting changes. `requests` is an array of Sheets Request objects
+    // (addSheet, deleteSheet, updateCells, repeatCell, mergeCells, ...).
+    batchUpdate: (spreadsheetId, requests, options = {}) =>
+      request('POST', `${SHEETS_BASE}/${spreadsheetId}:batchUpdate`, {
+        requests,
+        includeSpreadsheetInResponse: options.includeSpreadsheetInResponse || undefined
+      })
+  },
+
+  values: {
+    // range is A1 notation: 'Sheet1!A1:D20', 'Sheet1', 'A:C'
+    get: (spreadsheetId, range, options = {}) => request('GET', valuesUrl(spreadsheetId, range), null, {
+      majorDimension: options.majorDimension || undefined,
+      valueRenderOption: options.valueRenderOption || undefined,
+      dateTimeRenderOption: options.dateTimeRenderOption || undefined
+    }),
+
+    batchGet: (spreadsheetId, ranges, options = {}) =>
+      request('GET', `${SHEETS_BASE}/${spreadsheetId}/values:batchGet`, null, {
+        ranges,
+        majorDimension: options.majorDimension || undefined,
+        valueRenderOption: options.valueRenderOption || undefined,
+        dateTimeRenderOption: options.dateTimeRenderOption || undefined
+      }),
+
+    // Overwrite a range. values is a 2D array (rows of cells).
+    // valueInputOption: 'USER_ENTERED' (default; parses formulas/dates/numbers) or 'RAW'.
+    update: (spreadsheetId, range, values, options = {}) =>
+      request('PUT', valuesUrl(spreadsheetId, range), { range, majorDimension: options.majorDimension || undefined, values }, {
+        valueInputOption: options.valueInputOption || 'USER_ENTERED'
+      }),
+
+    // Append rows after the last row of the table found in `range`.
+    append: (spreadsheetId, range, values, options = {}) =>
+      request('POST', valuesUrl(spreadsheetId, range, ':append'), { majorDimension: options.majorDimension || undefined, values }, {
+        valueInputOption: options.valueInputOption || 'USER_ENTERED',
+        insertDataOption: options.insertDataOption || undefined
+      }),
+
+    // Clear values (formatting is kept).
+    clear: (spreadsheetId, range) => request('POST', valuesUrl(spreadsheetId, range, ':clear'), {}),
+
+    // Write several ranges in one call. data: [{ range, values }, ...]
+    batchUpdate: (spreadsheetId, data, options = {}) =>
+      request('POST', `${SHEETS_BASE}/${spreadsheetId}/values:batchUpdate`, {
+        valueInputOption: options.valueInputOption || 'USER_ENTERED',
+        data
+      })
+  },
+
+  // Add a tab. Returns the new sheet's properties ({ sheetId, title, index, ... }).
+  addSheet: async (spreadsheetId, title, options = {}) => {
+    const properties = { title };
+    if (options.index !== undefined) properties.index = options.index;
+    const result = await sheets.spreadsheets.batchUpdate(spreadsheetId, [{ addSheet: { properties } }]);
+    return result.replies[0].addSheet.properties;
+  },
+
+  // Delete a tab by numeric sheetId (from spreadsheets.get, not the tab title).
+  deleteSheet: (spreadsheetId, sheetId) =>
+    sheets.spreadsheets.batchUpdate(spreadsheetId, [{ deleteSheet: { sheetId } }])
+};
+
+// ============================================================================
+// GOOGLE DOCS API
+// ============================================================================
+
+const DOCS_BASE = 'https://docs.googleapis.com/v1/documents';
+
+// Plain text of a Docs body (array of StructuralElements). Table cells are
+// tab-separated, one row per line.
+function docContentText(content) {
+  let out = '';
+  for (const el of content || []) {
+    if (el.paragraph) {
+      for (const pe of el.paragraph.elements || []) {
+        if (pe.textRun?.content) out += pe.textRun.content;
+      }
+    } else if (el.table) {
+      for (const row of el.table.tableRows || []) {
+        const cells = (row.tableCells || []).map(c => docContentText(c.content).replace(/\n+$/, ''));
+        out += cells.join('\t') + '\n';
+      }
+    } else if (el.tableOfContents) {
+      out += docContentText(el.tableOfContents.content);
+    }
+  }
+  return out;
+}
+
+// Depth-first list of a document's tabs, child tabs included.
+function flattenDocTabs(tabs) {
+  const out = [];
+  for (const tab of tabs || []) {
+    out.push(tab);
+    out.push(...flattenDocTabs(tab.childTabs));
+  }
+  return out;
+}
+
+const docs = {
+  documents: {
+    get: (documentId, options = {}) => request('GET', `${DOCS_BASE}/${documentId}`, null, {
+      includeTabsContent: options.includeTabsContent ? 'true' : undefined,
+      suggestionsViewMode: options.suggestionsViewMode || undefined,
+      fields: options.fields || undefined
+    }),
+
+    // options: { title }. Creates an empty document; add content with appendText/batchUpdate.
+    create: (options = {}) => request('POST', DOCS_BASE, { title: options.title || 'Untitled document' }),
+
+    // `requests` is an array of Docs Request objects (insertText, replaceAllText,
+    // updateTextStyle, insertTable, deleteContentRange, ...).
+    batchUpdate: (documentId, requests, options = {}) =>
+      request('POST', `${DOCS_BASE}/${documentId}:batchUpdate`, {
+        requests,
+        writeControl: options.writeControl || undefined
+      })
+  },
+
+  // Plain text of the document. All tabs by default (joined in order);
+  // options.tabId selects one tab.
+  getText: async (documentId, options = {}) => {
+    const doc = await docs.documents.get(documentId, { includeTabsContent: true });
+    let tabs = flattenDocTabs(doc.tabs);
+    if (options.tabId) {
+      tabs = tabs.filter(t => t.tabProperties?.tabId === options.tabId);
+      if (!tabs.length) throw new Error(`Tab ${options.tabId} not found in document ${documentId}`);
+    }
+    return tabs.map(t => docContentText(t.documentTab?.body?.content)).join('\n');
+  },
+
+  // Append text at the end of the body. options: { tabId }
+  appendText: (documentId, text, options = {}) =>
+    docs.documents.batchUpdate(documentId, [{
+      insertText: { text, endOfSegmentLocation: options.tabId ? { tabId: options.tabId } : {} }
+    }]),
+
+  // Insert text at a character index (1 = start of body). options: { tabId }
+  insertText: (documentId, text, index, options = {}) =>
+    docs.documents.batchUpdate(documentId, [{
+      insertText: { text, location: { index, ...(options.tabId ? { tabId: options.tabId } : {}) } }
+    }]),
+
+  // Replace every occurrence of `find`. Returns the number of replacements.
+  replaceText: async (documentId, find, replacement, options = {}) => {
+    const result = await docs.documents.batchUpdate(documentId, [{
+      replaceAllText: {
+        containsText: { text: find, matchCase: options.matchCase !== false },
+        replaceText: replacement
+      }
+    }]);
+    return result.replies?.[0]?.replaceAllText?.occurrencesChanged || 0;
+  }
+};
+
+// ============================================================================
+// GOOGLE SLIDES API
+// ============================================================================
+
+const SLIDES_BASE = 'https://slides.googleapis.com/v1/presentations';
+
+function slideTextContent(text) {
+  return (text?.textElements || []).map(te => te.textRun?.content || '').join('');
+}
+
+// Plain text of a page's elements: shapes, tables (tab-separated cells), and groups.
+function pageElementsText(elements) {
+  let out = '';
+  for (const el of elements || []) {
+    if (el.shape?.text) {
+      out += slideTextContent(el.shape.text);
+    } else if (el.table) {
+      for (const row of el.table.tableRows || []) {
+        const cells = (row.tableCells || []).map(c => slideTextContent(c.text).replace(/\n+$/, ''));
+        out += cells.join('\t') + '\n';
+      }
+    } else if (el.elementGroup) {
+      out += pageElementsText(el.elementGroup.children);
+    }
+  }
+  return out;
+}
+
+function speakerNotesText(slide) {
+  const notesPage = slide.slideProperties?.notesPage;
+  const notesId = notesPage?.notesProperties?.speakerNotesObjectId;
+  const shape = (notesPage?.pageElements || []).find(el => el.objectId === notesId);
+  return slideTextContent(shape?.shape?.text);
+}
+
+const slides = {
+  presentations: {
+    get: (presentationId, options = {}) => request('GET', `${SLIDES_BASE}/${presentationId}`, null, {
+      fields: options.fields || undefined
+    }),
+
+    // options: { title }
+    create: (options = {}) => request('POST', SLIDES_BASE, { title: options.title || 'Untitled presentation' }),
+
+    // `requests` is an array of Slides Request objects (createSlide, insertText,
+    // replaceAllText, createShape, createImage, deleteObject, ...).
+    batchUpdate: (presentationId, requests, options = {}) =>
+      request('POST', `${SLIDES_BASE}/${presentationId}:batchUpdate`, {
+        requests,
+        writeControl: options.writeControl || undefined
+      })
+  },
+
+  pages: {
+    get: (presentationId, pageId) => request('GET', `${SLIDES_BASE}/${presentationId}/pages/${pageId}`),
+
+    // Returns { contentUrl, width, height }. contentUrl is a short-lived PNG URL.
+    // options: { size: 'SMALL'|'MEDIUM'|'LARGE', mimeType: 'PNG' }
+    getThumbnail: (presentationId, pageId, options = {}) =>
+      request('GET', `${SLIDES_BASE}/${presentationId}/pages/${pageId}/thumbnail`, null, {
+        'thumbnailProperties.thumbnailSize': options.size || undefined,
+        'thumbnailProperties.mimeType': options.mimeType || undefined
+      })
+  },
+
+  // Text of every slide: [{ index, objectId, text, notes }]. index is 1-based.
+  getText: async (presentationId) => {
+    const deck = await slides.presentations.get(presentationId);
+    return (deck.slides || []).map((slide, i) => ({
+      index: i + 1,
+      objectId: slide.objectId,
+      text: pageElementsText(slide.pageElements),
+      notes: speakerNotesText(slide)
+    }));
+  },
+
+  // Add a slide. options: { layout: predefined layout name (default 'BLANK'), insertionIndex, objectId }
+  // Returns the new slide's objectId.
+  addSlide: async (presentationId, options = {}) => {
+    const createSlide = { slideLayoutReference: { predefinedLayout: options.layout || 'BLANK' } };
+    if (options.insertionIndex !== undefined) createSlide.insertionIndex = options.insertionIndex;
+    if (options.objectId) createSlide.objectId = options.objectId;
+    const result = await slides.presentations.batchUpdate(presentationId, [{ createSlide }]);
+    return result.replies[0].createSlide.objectId;
+  },
+
+  // Replace every occurrence of `find` across the deck. Returns the number of replacements.
+  replaceText: async (presentationId, find, replacement, options = {}) => {
+    const result = await slides.presentations.batchUpdate(presentationId, [{
+      replaceAllText: {
+        containsText: { text: find, matchCase: options.matchCase !== false },
+        replaceText: replacement,
+        pageObjectIds: options.pageObjectIds || undefined
+      }
+    }]);
+    return result.replies?.[0]?.replaceAllText?.occurrencesChanged || 0;
+  }
+};
+
+// ============================================================================
+// GOOGLE TASKS API
+// ============================================================================
+
+const TASKS_BASE = 'https://tasks.googleapis.com/tasks/v1';
+
+// Task list IDs are URL-safe; '@default' must stay unescaped.
+const taskListUrl = (options = {}) => `${TASKS_BASE}/lists/${options.tasklistId || '@default'}`;
+
+const tasks = {
+  tasklists: {
+    list: (options = {}) => request('GET', `${TASKS_BASE}/users/@me/lists`, null, {
+      maxResults: options.maxResults || 100,
+      pageToken: options.pageToken || undefined
+    }),
+    get: (tasklistId = '@default') => request('GET', `${TASKS_BASE}/users/@me/lists/${tasklistId}`),
+    create: (options = {}) => request('POST', `${TASKS_BASE}/users/@me/lists`, { title: options.title }),
+    patch: (tasklistId, fields) => request('PATCH', `${TASKS_BASE}/users/@me/lists/${tasklistId}`, fields),
+    delete: (tasklistId) => request('DELETE', `${TASKS_BASE}/users/@me/lists/${tasklistId}`)
+  },
+
+  // Every method takes options.tasklistId (default '@default', the user's primary list).
+  tasks: {
+    list: (options = {}) => request('GET', `${taskListUrl(options)}/tasks`, null, {
+      maxResults: options.maxResults || 100,
+      pageToken: options.pageToken || undefined,
+      showCompleted: options.showCompleted === false ? 'false' : undefined,
+      showHidden: options.showHidden ? 'true' : undefined,
+      showDeleted: options.showDeleted ? 'true' : undefined,
+      dueMin: options.dueMin || undefined,
+      dueMax: options.dueMax || undefined,
+      completedMin: options.completedMin || undefined,
+      completedMax: options.completedMax || undefined,
+      updatedMin: options.updatedMin || undefined
+    }),
+
+    get: (taskId, options = {}) => request('GET', `${taskListUrl(options)}/tasks/${taskId}`),
+
+    // task: { title, notes, due (RFC 3339; the API keeps the date only), status }
+    // options: { tasklistId, parent (task ID, makes a subtask), previous (sibling task ID to insert after) }
+    create: (task, options = {}) => request('POST', `${taskListUrl(options)}/tasks`, task, {
+      parent: options.parent || undefined,
+      previous: options.previous || undefined
+    }),
+
+    // Partial update (PATCH). Provide only the fields to change.
+    patch: (taskId, fields, options = {}) => request('PATCH', `${taskListUrl(options)}/tasks/${taskId}`, fields),
+
+    // Full-replace update (PUT). Provide the complete task resource, including id.
+    update: (taskId, task, options = {}) => request('PUT', `${taskListUrl(options)}/tasks/${taskId}`, task),
+
+    delete: (taskId, options = {}) => request('DELETE', `${taskListUrl(options)}/tasks/${taskId}`),
+
+    complete: (taskId, options = {}) => tasks.tasks.patch(taskId, { status: 'completed' }, options),
+
+    reopen: (taskId, options = {}) => tasks.tasks.patch(taskId, { status: 'needsAction', completed: null }, options),
+
+    // Reorder, re-parent, or move to another list.
+    // options: { tasklistId, parent, previous, destinationTasklist }
+    move: (taskId, options = {}) => request('POST', `${taskListUrl(options)}/tasks/${taskId}/move`, null, {
+      parent: options.parent || undefined,
+      previous: options.previous || undefined,
+      destinationTasklist: options.destinationTasklist || undefined
+    }),
+
+    // Hide all completed tasks in the list.
+    clearCompleted: (options = {}) => request('POST', `${taskListUrl(options)}/clear`)
+  }
+};
+
+// ============================================================================
 // COMBINED API OBJECT
 // ============================================================================
 
-const api = { gmail, calendar, drive, people };
+const api = { gmail, calendar, drive, people, sheets, docs, slides, tasks };
 
 // ============================================================================
 // EXECUTE CODE FROM STDIN
@@ -1007,8 +1364,8 @@ async function main() {
   }
 
   const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-  const fn = new AsyncFunction('api', 'gmail', 'calendar', 'drive', 'people', code);
-  await fn(api, gmail, calendar, drive, people);
+  const fn = new AsyncFunction('api', 'gmail', 'calendar', 'drive', 'people', 'sheets', 'docs', 'slides', 'tasks', code);
+  await fn(api, gmail, calendar, drive, people, sheets, docs, slides, tasks);
 }
 
 main().catch(err => {

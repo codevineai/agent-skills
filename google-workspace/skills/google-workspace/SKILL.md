@@ -12,7 +12,7 @@ Two ways to call the APIs:
 | Path | Covers |
 |------|--------|
 | **`gws` CLI** (preferred when installed and configured) | Every Workspace API method: Gmail, Calendar, Drive read/write, Docs, Sheets, Slides, Tasks, People |
-| **`google_api.js`** (always available) | Gmail, Calendar, Drive read, Contacts — plus the helpers gws does not have |
+| **`google_api.js`** (always available) | Gmail, Calendar, Drive read, Sheets, Docs, Slides, Tasks, Contacts — plus the helpers gws does not have |
 
 ## Choose the path first
 
@@ -25,7 +25,7 @@ command -v gws >/dev/null && gws auth status 2>/dev/null | grep -E '"token_valid
 - **`"token_valid": true`** → gws is installed and configured. **Use gws** for every call it can make (see [Using gws](#using-gws)).
 - **No output, or `token_valid` is false** → use `google_api.js` (see [Usage](#usage)). Do not install or configure gws unless the user asks.
 
-Use `google_api.js` even when gws is available for the helpers that have no gws equivalent: `gmail.messages.search` (parsed summaries), `gmail.messages.getBody`, `gmail.messages.send` / `gmail.drafts.create` (RFC 2822 message building), `gmail.ensureLabel`, `gmail.banishSender`, `people.isKnownSender` / `people.addKnownSender`, and any non-default `GOOGLE_PROFILE`.
+Use `google_api.js` even when gws is available for the helpers that have no gws equivalent: `gmail.messages.search` (parsed summaries), `gmail.messages.getBody`, `gmail.messages.send` / `gmail.drafts.create` (RFC 2822 message building), `gmail.ensureLabel`, `gmail.banishSender`, `people.isKnownSender` / `people.addKnownSender`, `docs.getText`, `slides.getText`, and any non-default `GOOGLE_PROFILE`. Drive writes (upload, move, delete, share) have no `google_api.js` wrapper — those need gws.
 
 If a gws call fails with `insufficient authentication scopes`, the gws token lacks that scope — fall back to `google_api.js` if it covers the call, otherwise tell the user to re-consent (see [Configuring gws](#configuring-gws)).
 
@@ -78,12 +78,16 @@ Read the type file relevant to your task:
 - **Checking calendar?** Read `types/calendar.d.ts`
 - **Searching/reading Drive files?** Read `types/drive.d.ts`
 - **Checking contacts / known senders?** Read `types/people.d.ts`
+- **Reading or writing a spreadsheet?** Read `types/sheets.d.ts`
+- **Reading or editing a Google Doc?** Read `types/docs.d.ts`
+- **Reading or editing a presentation?** Read `types/slides.d.ts`
+- **Managing tasks?** Read `types/tasks.d.ts`
 
 ## Usage
 
 ```bash
 node ${CLAUDE_SKILL_DIR}/google_api.js <<'EOF'
-// Your code here — api, gmail, calendar, drive are all available
+// Your code here — api, gmail, calendar, drive, people, sheets, docs, slides, tasks are all available
 const about = await drive.about.get();
 console.log(`Logged in as: ${about.user.emailAddress}`);
 EOF
@@ -252,6 +256,69 @@ await calendar.events.patch(ev.id, { location: 'Virtual' });
 await calendar.events.delete(ev.id);
 ```
 
+### Read and Write a Spreadsheet
+
+IDs come from the URL: `https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/edit` (same pattern for `/document/d/` and `/presentation/d/`).
+
+```javascript
+const id = 'SPREADSHEET_ID';
+const { values = [] } = await sheets.values.get(id, 'Sheet1!A1:D20');
+for (const row of values) console.log(row.join(' | '));
+
+// Overwrite from A1; formulas and numbers are parsed as if typed
+await sheets.values.update(id, 'Sheet1!A1', [['name', 'qty'], ['widgets', 12], ['total', '=SUM(B2:B2)']]);
+
+// Add rows after the last row of the table
+await sheets.values.append(id, 'Sheet1!A1', [['gadgets', 7]]);
+
+// New spreadsheet
+const ss = await sheets.spreadsheets.create({ title: 'Q3 Forecast', sheets: ['Data', 'Summary'] });
+console.log(ss.spreadsheetUrl);
+```
+
+### Read and Edit a Google Doc
+
+```javascript
+const text = await docs.getText('DOCUMENT_ID');   // all tabs, tables tab-separated
+console.log(text);
+
+await docs.appendText('DOCUMENT_ID', 'Action items\n- Send the report\n');
+const n = await docs.replaceText('DOCUMENT_ID', '{{client}}', 'Acme Corp');   // returns count
+
+const doc = await docs.documents.create({ title: 'Meeting notes' });
+```
+
+Formatting, tables, and images go through `docs.documents.batchUpdate(id, requests)`.
+
+### Read and Edit a Presentation
+
+```javascript
+for (const s of await slides.getText('PRESENTATION_ID')) {
+  console.log(`--- Slide ${s.index}\n${s.text}`);
+  if (s.notes.trim()) console.log(`Notes: ${s.notes}`);
+}
+
+const slideId = await slides.addSlide('PRESENTATION_ID', { layout: 'TITLE_AND_BODY' });
+await slides.replaceText('PRESENTATION_ID', '{{date}}', 'Sept 27, 2026');
+```
+
+Native Google Slides only — an uploaded `.pptx` is a Drive file, not a presentation.
+
+### Manage Tasks
+
+```javascript
+// Open tasks in the primary list
+const { items = [] } = await tasks.tasks.list({ showCompleted: false });
+for (const t of items) console.log(`${t.due?.slice(0, 10) || 'no date'}  ${t.title}`);
+
+const t = await tasks.tasks.create({ title: 'Send invoice', notes: 'Acme, September', due: '2026-10-05T00:00:00.000Z' });
+await tasks.tasks.complete(t.id);
+
+// Another list: pass tasklistId
+const { items: lists } = await tasks.tasklists.list();
+await tasks.tasks.create({ title: 'Book flights' }, { tasklistId: lists[1].id });
+```
+
 ## API Summary
 
 | API | Methods |
@@ -276,6 +343,16 @@ If a send/draft call fails with a 403 about insufficient scopes, the refresh tok
 | `drive.files` (read-only wrappers; write via gws) | `list(options?)`, `get(fileId, options?)`, `getContent(fileId)`, `exportAsText(fileId, mimeType?)`, `search(name, options?)` |
 | `drive.permissions` | `list(fileId)` |
 | `drive.about` | `get()` |
+| `sheets.spreadsheets` | `get(id, options?)`, `create(options?)`, `batchUpdate(id, requests, options?)` |
+| `sheets.values` | `get(id, range, options?)`, `batchGet(id, ranges, options?)`, `update(id, range, values, options?)`, `append(id, range, values, options?)`, `clear(id, range)`, `batchUpdate(id, data, options?)` |
+| `sheets` | `addSheet(id, title, options?)`, `deleteSheet(id, sheetId)` |
+| `docs.documents` | `get(id, options?)`, `create(options?)`, `batchUpdate(id, requests, options?)` |
+| `docs` | `getText(id, options?)`, `appendText(id, text, options?)`, `insertText(id, text, index, options?)`, `replaceText(id, find, replacement, options?)` |
+| `slides.presentations` | `get(id, options?)`, `create(options?)`, `batchUpdate(id, requests, options?)` |
+| `slides.pages` | `get(id, pageId)`, `getThumbnail(id, pageId, options?)` |
+| `slides` | `getText(id)`, `addSlide(id, options?)`, `replaceText(id, find, replacement, options?)` |
+| `tasks.tasklists` | `list(options?)`, `get(tasklistId?)`, `create(options)`, `patch(tasklistId, fields)`, `delete(tasklistId)` |
+| `tasks.tasks` | `list(options?)`, `get(taskId, options?)`, `create(task, options?)`, `patch(taskId, fields, options?)`, `update(taskId, task, options?)`, `delete(taskId, options?)`, `complete(taskId, options?)`, `reopen(taskId, options?)`, `move(taskId, options?)`, `clearCompleted(options?)` |
 | `people.connections` | `list(options?)` |
 | `people.otherContacts` | `list(options?)`, `search(query, options?)` |
 | `people` | `isKnownSender(email)`, `addKnownSender(email)` |
